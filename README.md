@@ -34,6 +34,7 @@ rl/
 ├── train_sac_mac.py      # SAC baseline (cheetah_run, 500k steps)
 ├── plot_results.py       # Matplotlib learning curve plots
 ├── requirements.txt      # All dependencies
+├── Figure_1_rl.png       # Baseline learning curves
 ├── logs/
 │   ├── ppo_walker_mac/   # PPO checkpoints + eval logs
 │   └── sac_cheetah_mac/  # SAC checkpoints + eval logs
@@ -47,10 +48,7 @@ rl/
 ### Prerequisites
 
 ```bash
-# Install Homebrew if not already installed
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-# Install system dependencies
 brew install python glfw git
 ```
 
@@ -65,7 +63,6 @@ pip install --upgrade pip setuptools wheel
 ### Install Dependencies
 
 ```bash
-# Core RL and physics
 pip install torch torchvision torchaudio
 pip install "stable-baselines3[extra]" gymnasium
 pip install numpy matplotlib tensorboard seaborn pandas
@@ -152,39 +149,43 @@ python3 train_sac_mac.py
 
 ---
 
-## Results (Baselines)
+## Baseline Results
 
-### PPO — Walker Walk
+### Learning Curves
 
-| Timesteps | Mean Reward |
-|-----------|-------------|
-| 10,000 | 23.2 |
-| 20,000 | 32.5 |
-| 30,000 | 39.9 |
-| 40,000 | 60.3 |
-| 290,000 | 184.3 (best) |
-| 300,000 | 174.3 |
+![PPO and SAC Baseline Learning Curves](Figure_1_rl.png)
 
-### SAC — Cheetah Run
-
-| Timesteps | Mean Reward |
-|-----------|-------------|
-| 20,000 | 16.7 |
-| 40,000 | 44.7 |
-| 60,000 | 73.3 |
-| 72,000 | climbing ↑ |
+*Left: PPO on Walker-Walk (300k steps) — Right: SAC on Cheetah-Run (500k steps)*
 
 ---
 
-## Plot Results
+### Analysis
 
-After both training runs complete:
+#### PPO — Walker Walk (left plot)
 
-```bash
-python3 plot_results.py
-```
+- **Early phase (0–50k steps):** Reward rises rapidly from ~20 to ~90, showing the agent quickly learns basic locomotion behavior.
+- **Mid phase (50k–150k steps):** Reward reaches ~160, indicating the walker has learned a stable gait. High variance (large fluctuations) is typical for PPO's on-policy updates — each policy update discards old data, causing oscillations.
+- **Late phase (150k–300k steps):** Reward continues a noisy upward trend, peaking at **~184** at 290k steps and finishing at **~174** at 300k steps. The oscillations do not reduce significantly, which is a known limitation of PPO on locomotion tasks.
+- **Overall:** PPO achieves moderate performance (~180 final reward) but with high variance, confirming it is a weaker baseline compared to off-policy methods on continuous control.
 
-Saves learning curves to `./logs/baseline_results.png`.
+#### SAC — Cheetah Run (right plot)
+
+- **Early phase (0–100k steps):** Reward climbs steeply from ~0 to ~300, demonstrating SAC's superior sample efficiency as an off-policy algorithm with a large replay buffer.
+- **Mid phase (100k–300k steps):** A sharp dip to ~150 at ~250k steps indicates a temporary policy collapse — common in SAC when entropy regularization causes the agent to explore widely before recovering. Reward quickly recovers to ~450.
+- **Late phase (300k–500k steps):** A second dip to ~300 at ~400k steps followed by a strong recovery to **~530**, the best performance recorded.
+- **Overall:** SAC reaches ~530 final reward, nearly **3× higher than PPO's ~180**, confirming that off-policy methods with replay buffers are far more sample efficient on continuous control benchmarks.
+
+#### Key Takeaways
+
+| Metric | PPO (Walker) | SAC (Cheetah) |
+|--------|-------------|---------------|
+| Final reward | ~174 | ~530 |
+| Peak reward | ~184 | ~530 |
+| Convergence stability | Low (high variance) | Medium (two dips, strong recovery) |
+| Sample efficiency | Lower | Higher |
+| Training time | ~18 min (300k steps) | ~120 min (500k steps) |
+
+These results confirm that **SAC significantly outperforms PPO in both final reward and sample efficiency**, establishing a strong off-policy baseline for comparison against TD-MPC2 in the next phase of the project.
 
 ---
 
