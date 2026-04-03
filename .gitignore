@@ -1,17 +1,25 @@
-# Virtual environment - never push this
-rl-env/
-
-# Logs and model checkpoints - large files
-logs/
-
-# Python cache
+# Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.egg-info/
 
-# Mac system files
-.DS_Store
+# Virtual environments
+rl-env/
+.venv/
+venv/
 
-# Jupyter
+# Project outputs
+logs/
+artifacts/
+
+# Local tooling
+.codex
+.python-version
+
+# Notebooks
 .ipynb_checkpoints/
+
+# OS files
+.DS_Store
