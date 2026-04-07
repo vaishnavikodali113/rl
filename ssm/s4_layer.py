@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+from ssm.s5_layer import make_hippo_diag
 
 
 class S4Layer(nn.Module):
@@ -12,7 +13,7 @@ class S4Layer(nn.Module):
         self.state_dim = state_dim
         self.input_dim = input_dim
 
-        self.log_neg_a = nn.Parameter(torch.full((state_dim,), -0.5))
+        self.log_neg_a = nn.Parameter(torch.log(-make_hippo_diag(state_dim)))
         self.b = nn.Parameter(torch.randn(state_dim, input_dim) * 0.01)
         self.log_dt = nn.Parameter(torch.log(torch.full((state_dim,), dt)))
 
@@ -39,13 +40,27 @@ class S4Layer(nn.Module):
         return ratio.unsqueeze(1) * self.b
 
     def step(self, z_prev: torch.Tensor, u_t: torch.Tensor) -> torch.Tensor:
-        return self.a_bar.unsqueeze(0) * z_prev + (u_t @ self.b_bar.T)
+        dt = torch.exp(torch.clamp(self.log_dt, min=-8.0, max=1.0))
+        a_real = -torch.exp(torch.clamp(self.log_neg_a, min=-8.0, max=4.0))
+        a_bar = torch.exp(dt * a_real)
+        x = dt * a_real
+        ratio = torch.where(a_real.abs() < 1e-6, dt, torch.expm1(x) / a_real)
+        b_bar = ratio.unsqueeze(1) * self.b
+        return a_bar.unsqueeze(0) * z_prev + (u_t @ b_bar.T)
 
     def forward(self, inputs: torch.Tensor, z0: torch.Tensor | None = None) -> torch.Tensor:
         _, batch_size, _ = inputs.shape
         z = z0 if z0 is not None else torch.zeros(batch_size, self.state_dim, device=inputs.device)
+        
+        dt = torch.exp(torch.clamp(self.log_dt, min=-8.0, max=1.0))
+        a_real = -torch.exp(torch.clamp(self.log_neg_a, min=-8.0, max=4.0))
+        a_bar = torch.exp(dt * a_real)
+        x = dt * a_real
+        ratio = torch.where(a_real.abs() < 1e-6, dt, torch.expm1(x) / a_real)
+        b_bar = ratio.unsqueeze(1) * self.b
+        
         outputs = []
         for u_t in inputs:
-            z = self.step(z, u_t)
+            z = a_bar.unsqueeze(0) * z + (u_t @ b_bar.T)
             outputs.append(z)
         return torch.stack(outputs, dim=0)

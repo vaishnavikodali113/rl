@@ -23,7 +23,7 @@ def build_parser():
         "--total-steps",
         type=int,
         default=10000,
-        help="Training steps for TD-MPC commands (default: 10 for quick runs).",
+        help="Training steps for TD-MPC commands (default: 10000).",
     )
     parser.add_argument(
         "--max-wall-clock-seconds",

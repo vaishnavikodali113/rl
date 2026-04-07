@@ -9,6 +9,7 @@ class SAM(torch.optim.Optimizer):
     def __init__(self, params, base_optimizer_class, rho: float = 0.05, **kwargs):
         defaults = dict(rho=rho, **kwargs)
         super().__init__(params, defaults)
+        kwargs.pop("rho", None)
         self.base_optimizer = base_optimizer_class(self.param_groups, **kwargs)
         self.param_groups = self.base_optimizer.param_groups
         for group in self.param_groups:
@@ -32,10 +33,9 @@ class SAM(torch.optim.Optimizer):
     def second_step(self, zero_grad: bool = False) -> None:
         for group in self.param_groups:
             for p in group["params"]:
-                if p.grad is None:
+                if "e_w" not in self.state[p]:
                     continue
-                if "e_w" in self.state[p]:
-                    p.sub_(self.state[p]["e_w"])
+                p.sub_(self.state[p]["e_w"])
         self.base_optimizer.step()
         if zero_grad:
             self.zero_grad(set_to_none=True)
@@ -46,6 +46,11 @@ class SAM(torch.optim.Optimizer):
             raise RuntimeError("SAM.step requires a closure for two forward/backward passes.")
         closure = torch.enable_grad()(closure)
         loss = closure()
+        
+        has_grad = any(p.grad is not None for group in self.param_groups for p in group["params"])
+        if not has_grad:
+            raise RuntimeError("SAM.step closure did not produce any gradients. Check that loss.backward() is called.")
+            
         self.first_step(zero_grad=True)
         closure()
         self.second_step(zero_grad=True)

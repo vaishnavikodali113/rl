@@ -15,6 +15,8 @@ def make_hippo_diag(size: int) -> torch.Tensor:
 
 class S5Layer(nn.Module):
     """Simplified diagonal state-space layer with stable parameterization."""
+    
+    _scan_warning_emitted = False
 
     def __init__(
         self,
@@ -33,7 +35,6 @@ class S5Layer(nn.Module):
 
         log_dt = torch.rand(state_dim) * (np.log(dt_max) - np.log(dt_min)) + np.log(dt_min)
         self.log_dt = nn.Parameter(log_dt)
-        self._scan_warning_emitted = False
 
     @property
     def a(self) -> torch.Tensor:
@@ -50,7 +51,7 @@ class S5Layer(nn.Module):
         a = self.a
         x = dt * a
         ratio = torch.where(
-            x.abs() < 1e-6,
+            a.abs() < 1e-6,
             dt,
             torch.expm1(x) / a,
         )
@@ -69,12 +70,12 @@ class S5Layer(nn.Module):
         return torch.stack(outputs, dim=0)
 
     def forward_parallel_scan(self, inputs: torch.Tensor, z0: torch.Tensor | None = None) -> torch.Tensor:
-        if not self._scan_warning_emitted:
+        if not S5Layer._scan_warning_emitted:
             warnings.warn(
                 "S5Layer.forward_parallel_scan currently falls back to the sequential implementation.",
-                stacklevel=2,
+                stacklevel=3,
             )
-            self._scan_warning_emitted = True
+            S5Layer._scan_warning_emitted = True
         return self.forward_sequential(inputs, z0)
 
     def forward(self, inputs: torch.Tensor, z0: torch.Tensor | None = None, use_scan: bool = True) -> torch.Tensor:

@@ -42,7 +42,13 @@ class SSMDynamics(nn.Module):
         self.sim_norm = SimNorm(simnorm_dim, feature_dim=latent_dim) if simnorm_dim is not None else nn.Identity()
         self._hidden: torch.Tensor | None = None
 
-    def reset_hidden(self, batch_size: int, device: torch.device | str) -> None:
+    def detach_hidden(self) -> None:
+        if self._hidden is not None:
+            self._hidden = self._hidden.detach()
+
+    def reset_hidden(self, batch_size: int, device: torch.device | str | None = None) -> None:
+        if device is None:
+            device = next(self.parameters()).device
         self._hidden = torch.zeros(batch_size, self.state_dim, device=device)
 
     def forward(self, z: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
@@ -53,8 +59,17 @@ class SSMDynamics(nn.Module):
                 f"Hidden batch size mismatch: hidden={self._hidden.shape[0]} input={z.shape[0]}. "
                 "Call reset_hidden(...) before forward when batch size changes."
             )
+            
+        if self._hidden is not None and self._hidden.device != z.device:
+            self._hidden = self._hidden.to(z.device)
 
         u = torch.cat([z, action], dim=-1)
         h_next = self.ssm.step(self._hidden, u)
+        
+        # Prevent unbounded graph growth in recurrent execution when grads aren't needed
+        if not h_next.requires_grad:
+            h_next = h_next.detach()
+            
         self._hidden = h_next
-        return self.sim_norm(self.dropout(self.out_proj(h_next)))
+        h_dropped = self.dropout(h_next)
+        return self.sim_norm(self.out_proj(h_dropped))

@@ -17,9 +17,11 @@ class SimNorm(nn.Module):
             )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if x.shape[-1] % self.dim != 0:
+        expected_dim = self.feature_dim if self.feature_dim is not None else x.shape[-1]
+        if x.shape[-1] != expected_dim or x.shape[-1] % self.dim != 0:
             raise ValueError(
-                f"Latent dimension {x.shape[-1]} must be divisible by simnorm_dim={self.dim}."
+                f"Latent dimension {x.shape[-1]} must match feature_dim={self.feature_dim} "
+                f"and be divisible by simnorm_dim={self.dim}."
             )
         shape = x.shape
         x = x.view(*shape[:-1], -1, self.dim)

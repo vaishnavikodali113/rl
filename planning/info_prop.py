@@ -26,9 +26,10 @@ class InfoProp:
     @torch.no_grad()
     def compute_uncertainty(self, z: torch.Tensor, a: torch.Tensor) -> torch.Tensor:
         dynamics = self.model.dynamics
-        hidden_backup = None
-        if hasattr(dynamics, "_hidden") and dynamics._hidden is not None:
-            hidden_backup = dynamics._hidden.clone()
+        if hasattr(dynamics, "_hidden"):
+            hidden_backup = dynamics._hidden.clone() if dynamics._hidden is not None else None
+        else:
+            hidden_backup = None
 
         dropout_modules = []
         dropout_states = []
@@ -47,7 +48,7 @@ class InfoProp:
         finally:
             for module, state in zip(dropout_modules, dropout_states):
                 module.train(state)
-            if hidden_backup is not None and hasattr(dynamics, "_hidden"):
+            if hasattr(dynamics, "_hidden"):
                 dynamics._hidden = hidden_backup
 
         stacked = torch.stack(preds, dim=0)
@@ -65,7 +66,7 @@ class InfoProp:
         total = torch.zeros(batch_size, device=device)
         z = z0
         active = torch.ones(batch_size, dtype=torch.bool, device=device)
-        discounts = torch.pow(self.gamma, torch.arange(horizon, device=device, dtype=z0.dtype))
+        discounts = torch.pow(self.gamma, torch.arange(horizon, device=device, dtype=torch.float32))
 
         if hasattr(self.model.dynamics, "reset_hidden"):
             self.model.dynamics.reset_hidden(batch_size=batch_size, device=device)
@@ -83,21 +84,32 @@ class InfoProp:
                 if callable(bootstrap_check):
                     reliable = bool(bootstrap_check(z[uncertain]))
                 else:
-                    reliable = bool(getattr(self.model, "value_bootstrap_ready", True))
-                if not reliable:
-                    raise RuntimeError(
-                        "Encountered uncertain trajectories, but world model did not mark "
-                        "value bootstrap as reliable (set `value_bootstrap_ready=True` to enable)."
-                    )
-                q1, q2 = self.model.value(z[uncertain], a_t[uncertain])
-                total[uncertain] += discounts[t] * torch.minimum(q1, q2)
+                    reliable = bool(getattr(self.model, "value_bootstrap_ready", False))
+                if reliable:
+                    q1, q2 = self.model.value(z[uncertain], a_t[uncertain])
+                    total[uncertain] += discounts[t] * torch.minimum(q1, q2)
+                # If not reliable, trajectory defaults to zero reward for the uncertain remainder.
 
             certain = active & (~uncertain)
             if certain.any():
                 rewards = self.model.reward(z[certain], a_t[certain])
                 total[certain] += discounts[t] * rewards
+                
+                # Capture pre-step hidden state to prevent corrupting traces for dead trajectories
+                pre_hidden = None
+                if hasattr(self.model.dynamics, "_hidden") and self.model.dynamics._hidden is not None:
+                    pre_hidden = self.model.dynamics._hidden.clone()
+                    
                 z_next_full = self.model.dynamics(z, a_t)
+                
+                # Active trajectories get the new z. Uncertain/dead trajectories intentionally keep stale z.
                 z = torch.where(certain.unsqueeze(-1), z_next_full, z)
+                
+                # Restore hidden state for dead/uncertain trajectories
+                if pre_hidden is not None and hasattr(self.model.dynamics, "_hidden"):
+                    self.model.dynamics._hidden = torch.where(
+                        certain.unsqueeze(-1), self.model.dynamics._hidden, pre_hidden
+                    )
 
             active = certain
 

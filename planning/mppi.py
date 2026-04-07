@@ -18,6 +18,7 @@ class MPPI:
         action_low: float | torch.Tensor = -1.0,
         action_high: float | torch.Tensor = 1.0,
         info_prop=None,
+        noise_scale: float = 0.25,
     ):
         self.model = world_model
         self.action_dim = action_dim
@@ -28,6 +29,7 @@ class MPPI:
         self.a_low = action_low
         self.a_high = action_high
         self.info_prop = info_prop
+        self.noise_scale = noise_scale
         self._nominal_actions: torch.Tensor | None = None
 
     @torch.no_grad()
@@ -38,8 +40,6 @@ class MPPI:
         z_expand = z.unsqueeze(1).expand(-1, self.N, -1).reshape(batch_size * self.N, latent_dim)
 
         if self.info_prop is not None:
-            if hasattr(self.model.dynamics, "reset_hidden"):
-                self.model.dynamics.reset_hidden(batch_size=batch_size * self.N, device=device)
             returns = self.info_prop.plan_with_truncation(z_expand, actions, device)
             total_rewards = returns.reshape(batch_size, self.N)
         else:
@@ -72,25 +72,30 @@ class MPPI:
         low = self._to_tensor(self.a_low, device).view(1, 1, self.action_dim)
         high = self._to_tensor(self.a_high, device).view(1, 1, self.action_dim)
         nominal = self._get_nominal_sequence(batch_size, device)
-        noise_scale = 0.25 * (high - low)
+        noise_scale = self.noise_scale * (high - low)
         noise = torch.randn(self.H, batch_size, self.N, self.action_dim, device=device) * noise_scale.unsqueeze(2)
         candidates = nominal.unsqueeze(2) + noise
         candidates = torch.clamp(candidates, min=low.unsqueeze(2), max=high.unsqueeze(2))
-        return candidates.permute(0, 1, 2, 3).reshape(self.H, batch_size * self.N, self.action_dim)
+        return candidates.reshape(self.H, batch_size * self.N, self.action_dim)
 
     def _get_nominal_sequence(self, batch_size: int, device: torch.device | str) -> torch.Tensor:
         low = self._to_tensor(self.a_low, device).view(1, 1, self.action_dim)
         high = self._to_tensor(self.a_high, device).view(1, 1, self.action_dim)
         if self._nominal_actions is None or self._nominal_actions.shape[1] != batch_size:
             self._nominal_actions = low + (high - low) * torch.rand(self.H, batch_size, self.action_dim, device=device)
-        return self._nominal_actions.to(device=device)
+        self._nominal_actions = self._nominal_actions.to(device=device)
+        return self._nominal_actions
 
     def _update_nominal_sequence(self, actions: torch.Tensor, weights: torch.Tensor, batch_size: int) -> None:
         candidates = actions.reshape(self.H, batch_size, self.N, self.action_dim)
         weighted = (weights.unsqueeze(0).unsqueeze(-1) * candidates).sum(dim=2)
         shifted = torch.empty_like(weighted)
         shifted[:-1] = weighted[1:]
-        shifted[-1] = weighted[-1]
+        
+        # Sample fresh nominal tail to avoid long-term biasing
+        low = self._to_tensor(self.a_low, weighted.device)
+        high = self._to_tensor(self.a_high, weighted.device)
+        shifted[-1] = low + (high - low) * torch.rand(batch_size, self.action_dim, device=weighted.device)
         self._nominal_actions = shifted.detach()
 
     @staticmethod
