@@ -9,6 +9,12 @@ class InfoProp:
     When uncertainty exceeds the threshold, the trajectory is *truncated* and
     bootstrapped through the value function for the remainder. This assumes the
     value model is calibrated on the latent space used here.
+
+    WARNING: MC Dropout computes `K` passes per rollout step for all `N` samples.
+    This creates an O(K * H * N) computational overhead per MPPI planning step, 
+    so it expects high-capacity GPU processing. Furthermore, trajectories that 
+    fail reliability checks during bootstrap fallback default to a flat reward of 0 
+    for their remainder; this biases the planner heavily to *avoid* uncertain regions.
     """
 
     def __init__(
@@ -22,6 +28,7 @@ class InfoProp:
         self.K = n_ensemble
         self.threshold = uncertainty_threshold
         self.gamma = gamma
+        self.running_var = None
 
     @torch.no_grad()
     def compute_uncertainty(self, z: torch.Tensor, a: torch.Tensor) -> torch.Tensor:
@@ -49,10 +56,16 @@ class InfoProp:
             for module, state in zip(dropout_modules, dropout_states):
                 module.train(state)
             if hasattr(dynamics, "_hidden"):
-                dynamics._hidden = hidden_backup
+                dynamics._hidden = hidden_backup.clone() if hidden_backup is not None else None
 
         stacked = torch.stack(preds, dim=0)
-        return stacked.var(dim=0).mean(dim=-1)
+        var_est = stacked.var(dim=0).mean(dim=-1)
+        if self.running_var is None:
+            self.running_var = var_est.mean().item()
+        else:
+            self.running_var = 0.99 * self.running_var + 0.01 * var_est.mean().item()
+
+        return var_est / (self.running_var + 1e-8)
 
     @torch.no_grad()
     def plan_with_truncation(
@@ -87,8 +100,9 @@ class InfoProp:
                     reliable = bool(getattr(self.model, "value_bootstrap_ready", False))
                 if reliable:
                     q1, q2 = self.model.value(z[uncertain], a_t[uncertain])
-                    total[uncertain] += discounts[t] * torch.minimum(q1, q2)
+                    total[uncertain] += discounts[t] * 0.5 * (q1 + q2)
                 # If not reliable, trajectory defaults to zero reward for the uncertain remainder.
+                # NOTE: This creates a hard avoidance bias against unexplored/uncertain regions.
 
             certain = active & (~uncertain)
             if certain.any():
@@ -100,6 +114,8 @@ class InfoProp:
                 if hasattr(self.model.dynamics, "_hidden") and self.model.dynamics._hidden is not None:
                     pre_hidden = self.model.dynamics._hidden.clone()
                     
+                # Note: The dynamics call mathematically advances the entire z batch state to keep
+                # RNN internal states dimensionally aligned, despite masking taking place afterward.
                 z_next_full = self.model.dynamics(z, a_t)
                 
                 # Active trajectories get the new z. Uncertain/dead trajectories intentionally keep stale z.

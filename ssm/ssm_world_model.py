@@ -2,8 +2,14 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+import sys
+import os
 
-from sim_norm import SimNorm
+try:
+    from sim_norm import SimNorm
+except ImportError:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from sim_norm import SimNorm
 from ssm.s5_layer import S5Layer
 
 
@@ -67,7 +73,7 @@ class SSMDynamics(nn.Module):
         h_next = self.ssm.step(self._hidden, u)
         
         # Prevent unbounded graph growth in recurrent execution when grads aren't needed
-        if not h_next.requires_grad:
+        if not torch.is_grad_enabled():
             h_next = h_next.detach()
             
         self._hidden = h_next

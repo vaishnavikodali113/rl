@@ -31,6 +31,8 @@ class MPPI:
         self.info_prop = info_prop
         self.noise_scale = noise_scale
         self._nominal_actions: torch.Tensor | None = None
+        self._a_low_tensor: torch.Tensor | None = None
+        self._a_high_tensor: torch.Tensor | None = None
 
     @torch.no_grad()
     def plan(self, z: torch.Tensor, device: torch.device | str) -> torch.Tensor:
@@ -39,28 +41,22 @@ class MPPI:
         actions = self._sample_action_sequences(batch_size, device)
         z_expand = z.unsqueeze(1).expand(-1, self.N, -1).reshape(batch_size * self.N, latent_dim)
 
+        if hasattr(self.model.dynamics, "reset_hidden"):
+            self.model.dynamics.reset_hidden(batch_size * self.N, device)
+
         if self.info_prop is not None:
             returns = self.info_prop.plan_with_truncation(z_expand, actions, device)
             total_rewards = returns.reshape(batch_size, self.N)
         else:
-            if hasattr(self.model.dynamics, "reset_hidden"):
-                self.model.dynamics.reset_hidden(batch_size * self.N, device)
-            _, rewards = self.model.rollout(z_expand, actions)
-            if rewards.ndim != 2 or rewards.shape[1] != (batch_size * self.N):
-                raise ValueError(
-                    "Expected rollout rewards with shape [horizon, batch_size * n_samples] "
-                    f"but got {tuple(rewards.shape)}."
-                )
-            discounts = torch.tensor([self.gamma**t for t in range(self.H)], device=device)
-            total_rewards = (rewards * discounts.unsqueeze(-1)).sum(dim=0)
-            if total_rewards.shape != (batch_size * self.N,):
-                raise ValueError(
-                    "Expected flattened rewards shape "
-                    f"({batch_size * self.N},) before reshape, got {tuple(total_rewards.shape)}."
-                )
-            # Contract: z_expand packs samples per-batch contiguously as
-            # [b0s0..b0sN-1, b1s0..], so the same ordering must be preserved by rollout.
-            total_rewards = total_rewards.reshape(batch_size, self.N)
+            returns = torch.zeros(batch_size * self.N, device=device)
+            discounts = torch.pow(self.gamma, torch.arange(self.H, device=device, dtype=torch.float32))
+
+            z_curr = z_expand
+            for t in range(self.H):
+                rewards = self.model.reward(z_curr, actions[t])
+                returns += discounts[t] * rewards
+                z_curr = self.model.dynamics(z_curr, actions[t])
+            total_rewards = returns.reshape(batch_size, self.N)
 
         weights = F.softmax(total_rewards / max(self.temp, 1e-6), dim=-1)
         first_actions = actions[0].reshape(batch_size, self.N, self.action_dim)
@@ -79,23 +75,31 @@ class MPPI:
         return candidates.reshape(self.H, batch_size * self.N, self.action_dim)
 
     def _get_nominal_sequence(self, batch_size: int, device: torch.device | str) -> torch.Tensor:
-        low = self._to_tensor(self.a_low, device).view(1, 1, self.action_dim)
-        high = self._to_tensor(self.a_high, device).view(1, 1, self.action_dim)
-        if self._nominal_actions is None or self._nominal_actions.shape[1] != batch_size:
-            self._nominal_actions = low + (high - low) * torch.rand(self.H, batch_size, self.action_dim, device=device)
+        if (
+            self._nominal_actions is None
+            or self._nominal_actions.shape[1] != batch_size
+            or self._nominal_actions.device != device
+        ):
+            self._nominal_actions = torch.zeros((self.H, batch_size, self.action_dim), device=device)
         self._nominal_actions = self._nominal_actions.to(device=device)
         return self._nominal_actions
 
     def _update_nominal_sequence(self, actions: torch.Tensor, weights: torch.Tensor, batch_size: int) -> None:
         candidates = actions.reshape(self.H, batch_size, self.N, self.action_dim)
         weighted = (weights.unsqueeze(0).unsqueeze(-1) * candidates).sum(dim=2)
+        
+        if self._a_low_tensor is None or self._a_low_tensor.device != weighted.device:
+            self._a_low_tensor = self._to_tensor(self.a_low, weighted.device)
+        if self._a_high_tensor is None or self._a_high_tensor.device != weighted.device:
+            self._a_high_tensor = self._to_tensor(self.a_high, weighted.device)
+            
+        weighted = torch.clamp(weighted, self._a_low_tensor, self._a_high_tensor)
+
         shifted = torch.empty_like(weighted)
         shifted[:-1] = weighted[1:]
-        
-        # Sample fresh nominal tail to avoid long-term biasing
-        low = self._to_tensor(self.a_low, weighted.device)
-        high = self._to_tensor(self.a_high, weighted.device)
-        shifted[-1] = low + (high - low) * torch.rand(batch_size, self.action_dim, device=weighted.device)
+        shifted[-1] = (
+            torch.rand_like(weighted[-1]) * (self._a_high_tensor - self._a_low_tensor) + self._a_low_tensor
+        )
         self._nominal_actions = shifted.detach()
 
     @staticmethod

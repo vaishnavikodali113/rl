@@ -11,6 +11,8 @@ class SAM(torch.optim.Optimizer):
         super().__init__(params, defaults)
         kwargs.pop("rho", None)
         self.base_optimizer = base_optimizer_class(self.param_groups, **kwargs)
+        # Note: self.param_groups perfectly aliases base_optimizer.param_groups here.
+        # Calling super().add_param_group on SAM will break this symmetry and should be avoided.
         self.param_groups = self.base_optimizer.param_groups
         for group in self.param_groups:
             group.setdefault("rho", rho)
@@ -35,7 +37,7 @@ class SAM(torch.optim.Optimizer):
             for p in group["params"]:
                 if "e_w" not in self.state[p]:
                     continue
-                p.sub_(self.state[p]["e_w"])
+                p.sub_(self.state[p].pop("e_w"))
         self.base_optimizer.step()
         if zero_grad:
             self.zero_grad(set_to_none=True)
@@ -53,6 +55,11 @@ class SAM(torch.optim.Optimizer):
             
         self.first_step(zero_grad=True)
         closure()
+        
+        has_grad_2 = any(p.grad is not None for group in self.param_groups for p in group["params"])
+        if not has_grad_2:
+            raise RuntimeError("SAM.step second closure did not produce any gradients. Check that loss.backward() is called.")
+            
         self.second_step(zero_grad=True)
         return loss
 

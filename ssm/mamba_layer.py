@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from ssm.s5_layer import make_hippo_diag
 
 
 class MambaLayer(nn.Module):
@@ -24,9 +25,7 @@ class MambaLayer(nn.Module):
         self.c_proj = nn.Linear(state_dim, state_dim)
         self.dt_proj = nn.Linear(input_dim, state_dim)
 
-        init_log_neg_a = torch.randn(state_dim).clamp(min=-2.0, max=2.0)
-        self.log_neg_a = nn.Parameter(init_log_neg_a)
-        self.out_proj = nn.Linear(state_dim, state_dim)
+        self.log_neg_a = nn.Parameter(torch.log(-make_hippo_diag(state_dim)))
 
     @property
     def a(self) -> torch.Tensor:
@@ -38,12 +37,11 @@ class MambaLayer(nn.Module):
         b_bar = self.b_proj(u_t) * dt
         h_next = a_bar * h_prev + b_bar
         y = self.c_proj(h_next)
-        y_proj = self.out_proj(y)
-        if y_proj.shape[-1] != self.state_dim:
+        if y.shape[-1] != self.state_dim:
             raise RuntimeError(
-                f"MambaLayer step output dim {y_proj.shape[-1]} does not match state_dim {self.state_dim}."
+                f"MambaLayer step output dim {y.shape[-1]} does not match state_dim {self.state_dim}."
             )
-        return y_proj
+        return y
 
     def forward(self, inputs: torch.Tensor, z0: torch.Tensor | None = None) -> torch.Tensor:
         if inputs.ndim != 3:
