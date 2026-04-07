@@ -24,6 +24,11 @@ rl/
 ├── env_setup.py            # dm_control -> Gymnasium wrapper
 ├── train_ppo_mac.py        # PPO training task
 ├── train_sac_mac.py        # SAC training task
+├── tdmpc2/
+│   ├── model.py            # Phase 1 TD-MPC2 world model components
+│   ├── replay_buffer.py    # Sequence replay buffer
+│   ├── trainer.py          # TD-MPC2 training loop and MPPI planner
+│   └── train_tdmpc2.py     # TD-MPC2 training entry point
 ├── test_env.py             # Lightweight environment smoke test
 ├── plot_results.py         # Plot saved evaluation curves
 ├── requirements.txt        # Python dependencies
@@ -197,6 +202,37 @@ Default training length: `100,000` timesteps.
 
 ```bash
 python main.py plot
+```
+
+### Train TD-MPC2 with MLP dynamics on Walker-Walk
+
+```bash
+python main.py tdmpc
+```
+
+`main.py tdmpc` now runs a **Stage 1 quick baseline** with `10,000` environment steps by default (instead of a long multi-hour run).  
+This is intended to finish much faster while keeping the same training pipeline and artifacts.
+
+Expected terminal output at startup:
+
+```text
+Selected device: cuda ...   # or mps/cpu depending on hardware
+Training output stored in artifacts/tdmpc2_walker_mlp/metrics.jsonl and artifacts/tdmpc2_walker_mlp/summary.json
+```
+
+During the run, metrics are logged every `1,000` steps, giving 10 log checkpoints up to 10,000.
+
+To train the same Phase 1 baseline on other domains directly:
+
+```bash
+python -m tdmpc2.train_tdmpc2 --env-name cheetah
+python -m tdmpc2.train_tdmpc2 --env-name hopper
+```
+
+You can still override the default length, for example:
+
+```bash
+python -m tdmpc2.train_tdmpc2 --env-name walker --total-steps 50000
 ```
 
 The training scripts print the selected runtime device automatically.
