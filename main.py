@@ -14,6 +14,7 @@ def build_parser():
             "tdmpc-s5",
             "tdmpc-mamba",
             "phase3",
+            "phase4",
             "plot",
             "all-phases",
         ],
@@ -109,6 +110,10 @@ def main():
         elif args.phase3:
             plot_args.append("--phase3")
         plot_main(plot_args)
+    elif args.command == "phase4":
+        from evaluation.main import main as eval_main
+
+        eval_main()
     elif args.command == "all-phases":
         from plot_results import main as plot_main
 
