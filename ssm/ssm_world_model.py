@@ -5,11 +5,7 @@ import torch.nn as nn
 import sys
 import os
 
-try:
-    from sim_norm import SimNorm
-except ImportError:
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from sim_norm import SimNorm
+from planning.sim_norm import SimNorm
 from ssm.s5_layer import S5Layer
 
 

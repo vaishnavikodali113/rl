@@ -109,23 +109,25 @@ class InfoProp:
                 rewards = self.model.reward(z[certain], a_t[certain])
                 total[certain] += discounts[t] * rewards
                 
-                # Capture pre-step hidden state to prevent corrupting traces for dead trajectories
-                pre_hidden = None
+                # Performance Optimization: Mask the dynamics call to skip dead trajectories.
+                # We save the full hidden state, slice it for the active batch,
+                # compute the step, and then scatter the results back.
+                full_hidden = None
                 if hasattr(self.model.dynamics, "_hidden") and self.model.dynamics._hidden is not None:
-                    pre_hidden = self.model.dynamics._hidden.clone()
-                    
-                # Note: The dynamics call mathematically advances the entire z batch state to keep
-                # RNN internal states dimensionally aligned, despite masking taking place afterward.
-                z_next_full = self.model.dynamics(z, a_t)
+                    full_hidden = self.model.dynamics._hidden
+                    self.model.dynamics._hidden = full_hidden[certain]
                 
-                # Active trajectories get the new z. Uncertain/dead trajectories intentionally keep stale z.
-                z = torch.where(certain.unsqueeze(-1), z_next_full, z)
+                # Compute next state only for certain trajectories
+                z_next_subset = self.model.dynamics(z[certain], a_t[certain])
                 
-                # Restore hidden state for dead/uncertain trajectories
-                if pre_hidden is not None and hasattr(self.model.dynamics, "_hidden"):
-                    self.model.dynamics._hidden = torch.where(
-                        certain.unsqueeze(-1), self.model.dynamics._hidden, pre_hidden
-                    )
+                # Update latent state
+                z = z.clone() # Ensure no side-effects on the original z tensor
+                z[certain] = z_next_subset
+                
+                # Restore and update hidden state
+                if full_hidden is not None:
+                    full_hidden[certain] = self.model.dynamics._hidden
+                    self.model.dynamics._hidden = full_hidden
 
             active = certain
 

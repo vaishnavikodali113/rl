@@ -22,7 +22,6 @@ class MambaLayer(nn.Module):
         self.input_dim = input_dim
 
         self.b_proj = nn.Linear(input_dim, state_dim)
-        self.c_proj = nn.Linear(state_dim, state_dim)
         self.dt_proj = nn.Linear(input_dim, state_dim)
 
         self.log_neg_a = nn.Parameter(torch.log(-make_hippo_diag(state_dim)))
@@ -36,12 +35,7 @@ class MambaLayer(nn.Module):
         a_bar = torch.exp(dt * self.a.unsqueeze(0))
         b_bar = self.b_proj(u_t) * dt
         h_next = a_bar * h_prev + b_bar
-        y = self.c_proj(h_next)
-        if y.shape[-1] != self.state_dim:
-            raise RuntimeError(
-                f"MambaLayer step output dim {y.shape[-1]} does not match state_dim {self.state_dim}."
-            )
-        return y
+        return h_next
 
     def forward(self, inputs: torch.Tensor, z0: torch.Tensor | None = None) -> torch.Tensor:
         if inputs.ndim != 3:
