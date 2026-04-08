@@ -44,12 +44,19 @@ def main():
     benchmark_results = {}
     for name, model in models.items():
         print(f"Benchmarking {name}...")
+        # Load weights if available
+        algo_key = name.replace("TD-MPC2 (", "tdmpc2_walker_").replace(")", "").lower().replace(" ", "_")
+        checkpoint_path = os.path.join("artifacts", algo_key, "model.pt")
+        if os.path.exists(checkpoint_path):
+            print(f"  Loading weights from {checkpoint_path}")
+            model.load_state_dict(torch.load(checkpoint_path, map_location='cpu'))
+        
         try:
-            ms = benchmark_update_step(model, device='cpu')
+            ms = benchmark_update_step(model, obs_dim, action_dim, device='cpu')
             benchmark_results[name] = ms
             print(f"  {ms:.2f} ms")
         except Exception as e:
-            print(f"  Failed: {e}")
+            print(f"  Failed benchmark: {e}")
             benchmark_results[name] = None
             
     print("Computing rollout errors...")
@@ -66,12 +73,7 @@ def main():
     if error_curves:
         plot_rollout_errors(error_curves, "artifacts/evaluation_pngs/fig2_rollout_error.png")
         
-    print("Plotting stability (mocked for visualization)...")
-    stability_res = {
-        "MLP H=5": 140, "MLP H=10": 90,
-        "S5 H=5": 160, "S5 H=10": 155
-    }
-    plot_planning_stability(stability_res, "artifacts/evaluation_pngs/fig3_planning_stability.png")
+    # Mocked stability plot removed as per adversarial review C-01
     
     # Optional: the user requested to run the policy in real environments to save in CSV.
     # However since we lack `dm_control` on system, and training artifacts might not
@@ -79,9 +81,9 @@ def main():
     # or wrap it in a function.
     try:
         print("Running policy evaluations (requires dm_control)...")
-        # run_all_evaluations(models, env_name="walker", task="walk", n_episodes=2)
+        run_all_evaluations(models, env_name="walker", task="walk", n_episodes=5, device=device)
     except Exception as e:
-        print(f"Skipping dm_control evaluation. Pulling stats from artifacts.")
+        print(f"Policy evaluation failed or dm_control missing: {e}")
 
     import csv
     with open("artifacts/evaluation_pngs/comparison_table.csv", "w") as f:
