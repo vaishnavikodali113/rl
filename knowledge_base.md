@@ -13,8 +13,12 @@ TD-MPC2 (Temporal Difference Learning for Model Predictive Control) is a model-b
     - **Encoder ($h$):** Maps observation $s_t$ to latent state $z_t$.
     - **Dynamics ($d$):** Predicts $z_{t+1}$ given $z_t$ and $a_t$.
     - **Reward ($r$):** Predicts scalar reward from $z_t, a_t$.
-    - **Value ($Q$):** Estimates expected future returns (via Ensemble Q-learning).
-- **Core Principle:** Training occurs via joint optimization of reward prediction, value estimation, and **latent consistency** (ensuring $d(z_t, a_t)$ matches encoded $h(s_{t+1})$).
+    - **Value ($Q$):** Estimates expected future returns via an ensemble of Q-functions ($Q_1, Q_2$).
+- **Core Principle:** Training occurs via joint optimization of reward prediction, value estimation, and **latent consistency** (ensuring $d(z_t, a_t)$ matches the target encoded state $h(s_{t+1})$), typically using discrete regression over log-transformed targets.
+- **Latent Interface Contracts**:
+    - **Dimensionality:** The latent state $z_t$ has a fixed dimension defined by `latent_dim`.
+    - **Normalisation (SimNorm):** Latents are normalized using **Simplicial Normalization**, projecting feature blocks onto a probability simplex (group-wise Softmax).
+    - **Stochasticity:** While the dynamics are functionally deterministic, **MC-Dropout** (p=0.1) is used during training and planning to provide uncertainty estimates.
 
 ### 1.2 Structured State-Space Models (SSMs)
 The codebase replaces traditional MLPs/RNNs in the dynamics model with SSMs to solve the **vanishing gradient** problem over long horizons.
@@ -22,8 +26,8 @@ The codebase replaces traditional MLPs/RNNs in the dynamics model with SSMs to s
 - **HiPPO (High-Order Polynomial Projection Operator):** A mathematical framework that projects the signal history onto orthogonal polynomials. It is used to initialize the $A$ matrix, allowing the model to track dependencies over thousands of steps.
 - **S4/S5 (Diagonal SSMs):** 
     - **S4:** Uses a bank of independent SISO (Single-Input Single-Output) systems.
-    - **S5:** Standardizes S4 into a **MIMO (Multi-Input Multi-Output)** system using a diagonalized state transition matrix. This allows for direct inter-channel interaction within a single recurrence.
-- **Mamba (Selective SSM):** Introduces **Selectivity**. Parameters ($B, C, \Delta$) become input-dependent, allowing the model to "choose" what to forget or remember based on the current latent state.
+    - **S5:** Standardizes the state transition matrix $A$ into a **diagonal MIMO** system. It uses a **Zero-Order Hold (ZOH)** discretization to compute $\bar{A} = \exp(\Delta A)$.
+- **Mamba (Selective SSM):** Introduces **Selectivity**. Discretization ($\Delta$) is computed via a Softplus projection of the input $u_t$, allowing the model to modulate information flow (gating) based on the current latent state.
 
 ### 1.3 MPPI: Model Predictive Path Integral
 A derivative-free, sampling-based optimal control algorithm. 
@@ -46,20 +50,26 @@ A derivative-free, sampling-based optimal control algorithm.
 
 #### `ssm_world_model.py`
 **`SSMDynamics` (Class)**
-- **Role:** The high-level interface for MPPI. It manages the hidden state `_hidden` of the recurrent layers.
-- **Function `forward(z, action)`:** Concatenates state and action, pushes through the selected SSM layer, and applies `out_proj`.
-- **Function `reset_hidden()`:** Critical for MPPI; clears the state between rollout simulations to prevent temporal leakage.
+- **Role:** High-level interface for MPPI. It manages the recurrent hidden state `_hidden`.
+- **Function `forward(z, action)`:** 
+    1. Concatenates $z$ and $a$.
+    2. Performs recurrence via `ssm.step(hidden, u)`.
+    3. Prevents graph growth via `.detach()` during planning (non-grad).
+    4. Applies **Dropout** (p=0.1) and **SimNorm**.
+- **Hidden State Management:** 
+    - `reset_hidden(batch_size)`: Initializes `_hidden` to zeros. MUST be called at the start of each MPPI rollout batch and each training sequence.
+    - `detach_hidden()`: Used during training to facilitate Truncated Backpropagation Through Time (T-BPTT).
 
 #### `s5_layer.py`
 **`S5Layer` (Class)**
-- **`make_hippo_diag()`:** Implements the HiPPO-style diagonal initialization for the $A$ matrix.
-- **`step(z_prev, u_t)`:** Performs the linear recurrence: $z_t = \bar{A} z_{t-1} + \bar{B} u_t$. 
-- **Implementation Note:** Uses **Parallel Scan** (though sequential fallback is currently implemented) for $O(\log L)$ training complexity.
+- **Mechanism:** Linear transition $h_t = \bar{A} h_{t-1} + \bar{B} u_t$.
+- **Initialization:** `make_hippo_diag()` uses a Hippo-style initialization for the log-negative diagonal of $A$.
+- **Discretization:** Uses Zero-Order Hold (ZOH). $\bar{A}$ and $\bar{B}$ are pre-computed analytically before the step.
 
 #### `mamba_layer.py`
 **`MambaLayer` (Class)**
-- **Mechanism:** Implements a simplified selective mechanism.
-- **`step(h_prev, u_t)`:** Calculates **input-dependent $\Delta$** using a Softplus projection. This determines the "discretization step size," effectively controlling the gating of information.
+- **Mechanism:** $h_t = \exp(\Delta A) h_{t-1} + (\Delta B) u_t$.
+- **Selectivity:** $\Delta$ (discretization step) is predicted per-step using `dt_proj` (Softplus). $B$ is also input-dependent (`b_proj`), allowing selective information intake based on $z_t, a_t$.
 
 ---
 
@@ -67,13 +77,19 @@ A derivative-free, sampling-based optimal control algorithm.
 
 #### `mppi.py`
 **`MPPI` (Class)**
-- **`plan(z, device)`:** The main entry point. Orchestrates the sampling, rollout, and Softmax-weighting loop.
-- **`_update_nominal_sequence()`:** Shifts the optimized plan locally so the next control step starts with a "warm" initialization.
+- **`plan(z, device)`:** 
+    1. Samples $N=512$ sequences from a nominal distribution.
+    2. Resets dynamics hidden state for $B \times N$ samples.
+    3. Scores trajectories using discounted predicted rewards.
+- **`_update_nominal_sequence()`:** Updates the mean of the sampling distribution using a **Softmax-weighted average** of elites. The sequence is then **time-shifted** (warm-start) for the next step.
 
 #### `info_prop.py`
 **`InfoProp` (Class)**
-- **`compute_uncertainty()`:** Performs $K$ stochastic forward passes (MC-Dropout) and calculates the variance of the predictions.
-- **`plan_with_truncation()`:** Injects uncertainty logic into the MPPI rollout. If variance > threshold, the transition is masked out, and the value is bootstrapped.
+- **`compute_uncertainty()`:** Measure variance across $K=5$ stochastic forward passes (via MC-Dropout). Uncertainty is defined as the mean variance of the predicted latent transition $z_{t+1}$.
+- **`plan_with_truncation()`:** 
+    - Truncates rollouts where `uncertainty / running_var > threshold`.
+    - **Bootstrap:** Replaces the remainder of truncated trajectories with the average of the Ensemble Q-functions ($Q_1, Q_2$).
+    - **Avoidance Bias:** If Value functions are not yet "ready" (unreliable), the reward is set to 0, biasing the planner away from unknown regions.
 
 #### `sam_optimizer.py`
 **`SAM` (Class)**
@@ -83,7 +99,7 @@ A derivative-free, sampling-based optimal control algorithm.
 
 #### `sim_norm.py`
 **`SimNorm` (Class)**
-- Normalizes latent vectors into sub-groups (Simplex). This prevents numerical explosion in the SSM recurrence and ensures the latent space remains bounded.
+- **Geometry:** Projects the latent vector into **simplex blocks**. It reshapes the input into groups of size `simnorm_dim=8` and applies `softmax` across the last dimension. This ensures the latent space remains bounded and promotes sparse feature activation.
 
 ---
 
@@ -105,7 +121,27 @@ Abstraction for hardware parity.
 
 ---
 
-## 3. Experimental Pipeline & Log Layout
+---
+
+## 4. Conceptual Alignment & Technical Risks
+
+### 4.1 Canonical TD-MPC2 vs. This Implementation
+| Feature | Canonical TD-MPC2 | This Project |
+| :--- | :--- | :--- |
+| **Planner** | Gradient-based (CEM/MPPI) | Pure MPPI (Sampling-based) |
+| **Dynamics** | MLP/RNN | Structured State-Space (S5/Mamba) |
+| **Latent Targets** | One-step consistency | Recurrent sequence consistency |
+| **Robustness** | LayerNorm/Ensemble | SAM + InfoProp (Truncation) |
+
+### 4.2 Engineering Risks & Mitigations
+- **Hidden State Contamination:** MPPI requires $N$ independent latent rollouts. Failure to call `reset_hidden` with the correct batch size before `plan()` leads to state leakage across samples.
+- **Train-Plan Mismatch:** MC-Dropout must be explicitly toggled in `InfoProp` while the rest of the model remains in `.eval()` mode to ensure uncertainty is calibrated.
+- **Bootstrap Accuracy:** Truncation relies on a calibrated Q-ensemble. If the Value heads are trained on teacher-forced latents but queried on drifted SSM rollouts, the bootstrap target may be overconfident.
+- **Numerical Stability:** SSM recurrent chains can explode. `SimNorm` is the primary safeguard; if the latent dimension is not divisible by the group size (8), initialization will fail.
+
+---
+
+## 5. Experimental Pipeline & Log Layout
 
 ### 3.1 Training Phases
 1. **Phase 0 (Baselines):** PPO and SAC benchmarks to establish the "floor."
