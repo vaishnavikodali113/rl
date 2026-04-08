@@ -23,3 +23,5 @@ artifacts/
 
 # OS files
 .DS_Store
+
+.sixth

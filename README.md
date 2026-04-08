@@ -24,6 +24,11 @@ rl/
 ├── env_setup.py            # dm_control -> Gymnasium wrapper
 ├── train_ppo_mac.py        # PPO training task
 ├── train_sac_mac.py        # SAC training task
+├── tdmpc2/
+│   ├── model.py            # Phase 1 TD-MPC2 world model components
+│   ├── replay_buffer.py    # Sequence replay buffer
+│   ├── trainer.py          # TD-MPC2 training loop and MPPI planner
+│   └── train_tdmpc2.py     # TD-MPC2 training entry point
 ├── test_env.py             # Lightweight environment smoke test
 ├── plot_results.py         # Plot saved evaluation curves
 ├── requirements.txt        # Python dependencies
@@ -199,7 +204,85 @@ Default training length: `100,000` timesteps.
 python main.py plot
 ```
 
+### Train TD-MPC2 with MLP dynamics on Walker-Walk
+
+```bash
+python main.py tdmpc
+```
+
+`main.py tdmpc` now runs a **Stage 1 quick baseline** with `10,000` environment steps by default (instead of a long multi-hour run).  
+This is intended to finish much faster while keeping the same training pipeline and artifacts.
+
+Expected terminal output at startup:
+
+```text
+Selected device: cuda ...   # or mps/cpu depending on hardware
+Training output stored in artifacts/tdmpc2_walker_mlp/metrics.jsonl and artifacts/tdmpc2_walker_mlp/summary.json
+```
+
+During the run, metrics are logged every `1,000` steps, giving 10 log checkpoints up to 10,000.
+
+To train the same Phase 1 baseline on other domains directly:
+
+```bash
+python -m tdmpc2.train_tdmpc2 --env-name cheetah
+python -m tdmpc2.train_tdmpc2 --env-name hopper
+```
+
+You can still override the default length, for example:
+
+```bash
+python -m tdmpc2.train_tdmpc2 --env-name walker --total-steps 50000
+```
+
 The training scripts print the selected runtime device automatically.
+
+### Phase 3 runs (H=5 vs H=10 + stability tools)
+
+You can now launch the default Phase 3 S5 + stability configuration via `main.py`:
+
+```bash
+python main.py phase3 --total-steps 200000 --max-wall-clock-seconds 2700
+```
+
+Use the new wall-clock cap to prevent runaway jobs. Example: stop each run after 45 minutes:
+
+```bash
+python -m tdmpc2.train_tdmpc2 --dynamics-type mlp --plan-horizon 10 \
+  --run-name tdmpc2_walker_mlp_h10 --total-steps 200000 --max-wall-clock-seconds 2700
+
+python -m tdmpc2.train_tdmpc2 --dynamics-type s5 --plan-horizon 10 \
+  --use-sam --simnorm-dim 8 --use-info-prop \
+  --run-name tdmpc2_walker_s5_h10 --total-steps 200000 --max-wall-clock-seconds 2700
+```
+
+You can generate the dedicated Phase 3 ablation figure with:
+
+```bash
+python plot_results.py --phase3
+```
+
+Or generate all phase-specific plots and per-run case plots in one go:
+
+```bash
+python plot_results.py --all-phases
+```
+
+This writes outputs under:
+
+- `artifacts/plots/overview/`
+- `artifacts/plots/phase0/`
+- `artifacts/plots/phase1/`
+- `artifacts/plots/phase2/`
+- `artifacts/plots/phase3/`
+- `artifacts/plots/all_cases/`
+
+Expected results for the Phase 3 comparison:
+
+- `tdmpc2_walker_mlp_h10` should underperform `tdmpc2_walker_mlp_h5` (planning degrades at longer horizon).
+- `tdmpc2_walker_s5_h10` should be close to or better than `tdmpc2_walker_s5_h5` (long-horizon stability with SSM dynamics).
+- Enabling `--use-sam` should reduce rollout error metrics compared with Adam-only runs.
+- Enabling `--use-info-prop` should reduce evaluation reward variance when planning enters uncertain regions.
 
 ## Output Layout
 
