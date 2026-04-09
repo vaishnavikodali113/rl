@@ -14,16 +14,16 @@ def compute_horizon_error_curve(model, test_sequences, max_horizon=10, device='c
     for obs_seq, act_seq in test_sequences:
         obs_seq = obs_seq.to(device)   # [T+1, obs_dim]
         act_seq = act_seq.to(device)   # [T, act_dim]
-        z0 = model.encoder(obs_seq[0].unsqueeze(0))
+        z0 = model.encoder(obs_seq[0].unsqueeze(0)).detach()
         
         if hasattr(model.dynamics, 'reset_hidden'):
-            model.dynamics.reset_hidden(1, device)
+            model.dynamics.reset_hidden(1)
             
         for h in range(1, max_horizon + 1):
             # Multi-step rollout to horizon h
             z = z0.clone()
             if hasattr(model.dynamics, 'reset_hidden'):
-                model.dynamics.reset_hidden(1, device)
+                model.dynamics.reset_hidden(1)
             for t in range(h):
                 z = model.dynamics(z, act_seq[t].unsqueeze(0))
                 

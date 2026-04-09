@@ -31,14 +31,19 @@ def main():
     print("Plotting sample efficiency...")
     plot_sample_efficiency(configs, save_path="artifacts/evaluation_pngs/fig4_sample_efficiency.png")
     
-    obs_dim = 24
-    action_dim = 6
+    from env_setup import make_env
+    env = make_env("walker", "walk")
+    obs_dim = env.observation_space.shape[0] if len(env.observation_space.shape) > 0 else 24
+    action_dim = env.action_space.shape[0] if len(env.action_space.shape) > 0 else 6
+    
+    latent_dim = 64
+    assert latent_dim % 8 == 0, "SimNorm requires the latent dimension to be divisible by the group size of 8"
     
     models = {
-        "TD-MPC2 (MLP)": TDMPC2Model(obs_dim, action_dim, dynamics_type="mlp"),
-        "TD-MPC2 (S4)": TDMPC2Model(obs_dim, action_dim, dynamics_type="s4", ssm_state_dim=64),
-        "TD-MPC2 (S5)": TDMPC2Model(obs_dim, action_dim, dynamics_type="s5", ssm_state_dim=64),
-        "TD-MPC2 (Mamba)": TDMPC2Model(obs_dim, action_dim, dynamics_type="mamba", ssm_state_dim=64),
+        "TD-MPC2 (MLP)": TDMPC2Model(obs_dim, action_dim, dynamics_type="mlp", latent_dim=latent_dim),
+        "TD-MPC2 (S4)": TDMPC2Model(obs_dim, action_dim, dynamics_type="s4", ssm_state_dim=64, latent_dim=latent_dim),
+        "TD-MPC2 (S5)": TDMPC2Model(obs_dim, action_dim, dynamics_type="s5", ssm_state_dim=64, latent_dim=latent_dim),
+        "TD-MPC2 (Mamba)": TDMPC2Model(obs_dim, action_dim, dynamics_type="mamba", ssm_state_dim=64, latent_dim=latent_dim),
     }
 
     benchmark_results = {}

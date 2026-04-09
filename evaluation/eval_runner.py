@@ -19,6 +19,8 @@ def evaluate_policy(model, env, n_episodes=20, device='cpu'):
         total_reward = 0.0
         done = False
         while not done:
+            if hasattr(model.dynamics, 'reset_hidden'):
+                model.dynamics.reset_hidden(planner.N)
             action = planner.plan(z, device).squeeze(0).cpu().numpy()
             obs, reward, done, *_ = env.step(action)
             obs_tensor = torch.tensor(obs[0], dtype=torch.float32, device=device).unsqueeze(0)
