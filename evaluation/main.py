@@ -1,129 +1,204 @@
-import torch
-import numpy as np
-import os
+from __future__ import annotations
 
-from evaluation.eval_runner import run_all_evaluations
-from evaluation.rollout_error import compute_horizon_error_curve, plot_rollout_errors
-from evaluation.compare_plots import plot_reward_curves, plot_sample_efficiency
+import csv
+import os
+from pathlib import Path
+
+import torch
+
 from evaluation.benchmark import benchmark_update_step
+from evaluation.compare_plots import (
+    discover_runs,
+    load_reward_series,
+    load_rollout_error_series,
+    plot_reward_curves,
+    plot_sample_efficiency,
+)
 from tdmpc2.model import TDMPC2Model
 
-def main():
-    print("Running Phase 4 Evaluations...")
-    os.makedirs("artifacts/evaluation_pngs", exist_ok=True)
-    
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    configs = {
-        "PPO (Walker)":        "artifacts/ppo_walker/metrics.jsonl",
-        "SAC (Cheetah)":       "artifacts/sac_cheetah/metrics.jsonl",
-        "TD-MPC2 MLP":         "artifacts/tdmpc2_walker_mlp/metrics.jsonl",
-        "TD-MPC2 S4":          "artifacts/tdmpc2_walker_s4/metrics.jsonl",
-        "TD-MPC2 S5":          "artifacts/tdmpc2_walker_s5/metrics.jsonl",
-        "TD-MPC2 Mamba":       "artifacts/tdmpc2_walker_mamba/metrics.jsonl",
-        "TD-MPC2 MLP (H10)":   "artifacts/tdmpc2_walker_mlp_h10/metrics.jsonl",
-        "TD-MPC2 S5 (H10)":    "artifacts/tdmpc2_walker_s5_h10/metrics.jsonl"
+def _device_for_eval() -> str:
+    if torch.cuda.is_available():
+        return "cuda"
+    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def _checkpoint_path(summary: dict) -> str | None:
+    artifacts = summary.get("artifacts", {})
+    candidates = [
+        Path("logs") / summary["run_name"] / "best" / "best_model.pt",
+        Path(str(artifacts.get("model", ""))),
+    ]
+    for candidate in candidates:
+        if candidate and candidate.exists() and candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def _build_model_from_checkpoint(run_record: dict, device: str) -> TDMPC2Model | None:
+    summary = run_record["summary"]
+    algorithm = str(summary.get("algorithm", "")).lower()
+    if "td-mpc2" not in algorithm:
+        return None
+
+    checkpoint_path = _checkpoint_path(summary)
+    if checkpoint_path is None:
+        return None
+
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    model_state = checkpoint["model_state_dict"]
+    config = checkpoint.get("config", {})
+
+    latent_dim = int(config.get("latent_dim", model_state["reward.net.0.weight"].shape[1] - 6))
+    obs_dim = int(model_state["encoder.net.0.weight"].shape[1])
+    action_dim = int(model_state["reward.net.0.weight"].shape[1] - latent_dim)
+    dynamics_type = summary["run_name"].split("_")[-1]
+    if dynamics_type == "h10":
+        dynamics_type = "s5"
+
+    model = TDMPC2Model(
+        obs_dim=obs_dim,
+        action_dim=action_dim,
+        latent_dim=latent_dim,
+        dynamics_type=dynamics_type,
+        ssm_state_dim=int(config.get("ssm_state_dim", 256)),
+        simnorm_dim=int(config.get("simnorm_dim", 8)) if config.get("simnorm_dim", 8) > 0 else None,
+    )
+    missing, unexpected = model.load_state_dict(model_state, strict=False)
+    if missing or unexpected:
+        print(
+            f"Checkpoint compatibility note for {summary['run_name']}: "
+            f"missing={list(missing)} unexpected={list(unexpected)}"
+        )
+    model.planner_config = {
+        "plan_horizon": config.get("plan_horizon", 5),
+        "plan_samples": config.get("plan_samples", 512),
+        "plan_temperature": config.get("plan_temperature", 0.5),
+        "gamma": config.get("gamma", 0.99),
     }
-    
-    print("Plotting reward curves...")
-    plot_reward_curves(configs, "artifacts/evaluation_pngs/fig1_reward_curves.png")
-    
-    print("Plotting sample efficiency...")
-    plot_sample_efficiency(configs, save_path="artifacts/evaluation_pngs/fig4_sample_efficiency.png")
-    
-    from env_setup import make_env
-    env = make_env("walker", "walk")
-    obs_dim = env.observation_space.shape[0] if len(env.observation_space.shape) > 0 else 24
-    action_dim = env.action_space.shape[0] if len(env.action_space.shape) > 0 else 6
-    
-    latent_dim = 64
-    
-    models = {
-        "TD-MPC2 (MLP)": TDMPC2Model(obs_dim, action_dim, dynamics_type="mlp", latent_dim=latent_dim),
-        "TD-MPC2 (S4)": TDMPC2Model(obs_dim, action_dim, dynamics_type="s4", ssm_state_dim=64, latent_dim=latent_dim),
-        "TD-MPC2 (S5)": TDMPC2Model(obs_dim, action_dim, dynamics_type="s5", ssm_state_dim=64, latent_dim=latent_dim),
-        "TD-MPC2 (Mamba)": TDMPC2Model(obs_dim, action_dim, dynamics_type="mamba", ssm_state_dim=64, latent_dim=latent_dim),
-    }
+    model.to(device)
+    model.eval()
+    return model
 
-    benchmark_results = {}
-    for name, model in models.items():
-        print(f"Benchmarking {name}...")
-        try:
-            ms = benchmark_update_step(model, device=device)
-            benchmark_results[name] = ms
-            print(f"  {ms:.2f} ms")
-        except Exception as e:
-            print(f"  Failed: {e}")
-            benchmark_results[name] = None
-            
-    print("Computing rollout errors...")
-    from tdmpc2.model import MLPDynamics
-    error_curves = {}
-    test_seqs = [ (torch.randn(11, obs_dim), torch.randn(10, action_dim)) for _ in range(5)]
-    for name, model in models.items():
-        try:
-            err = compute_horizon_error_curve(model, test_seqs, max_horizon=10, device=device)
-            error_curves[name.split()[-1].strip("()")] = err
-        except Exception as e:
-            print(f"Failed error curve for {name}: {e}")
-            
-    if error_curves:
-        plot_rollout_errors(error_curves, "artifacts/evaluation_pngs/fig2_rollout_error.png")
-        
-    print("Skipping planning stability plot: no measured stability dataset found.")
-    
-    # Optional: the user requested to run the policy in real environments to save in CSV.
-    # However since we lack `dm_control` on system, and training artifacts might not
-    # contain full trained weights ready, we skip `run_all_evaluations` if it fails layout,
-    # or wrap it in a function.
-    try:
-        print("Running policy evaluations (requires dm_control)...")
-        # run_all_evaluations(models, env_name="walker", task="walk", n_episodes=2)
-    except Exception as e:
-        print(f"Skipping dm_control evaluation. Pulling stats from artifacts.")
 
-    import csv
-    with open("artifacts/evaluation_pngs/comparison_table.csv", "w") as f:
-        writer = csv.DictWriter(f, fieldnames=[
-            "Algorithm", "Walker 200k", "Cheetah 200k", "Hopper 200k", "Rollout MSE H10", "ms/update"
-        ])
+def _format_metric(value: float | None, digits: int = 3) -> str:
+    if value is None:
+        return "---"
+    return f"{value:.{digits}f}"
+
+
+def _last_value(series: tuple | None) -> float | None:
+    if not series:
+        return None
+    _, values = series
+    if values is None or len(values) == 0:
+        return None
+    return float(values[-1])
+
+
+def _build_comparison_rows(run_records: dict[str, dict], device: str) -> list[dict[str, str]]:
+    rows = []
+    for run_name, record in run_records.items():
+        summary = record["summary"]
+        reward_series = load_reward_series(record)
+        error_series = load_rollout_error_series(record)
+        final_reward = _last_value(reward_series)
+        latent_mse = _last_value(error_series)
+        benchmark_ms = None
+
+        model = _build_model_from_checkpoint(record, device=device)
+        if model is not None:
+            try:
+                benchmark_ms = benchmark_update_step(
+                    model,
+                    batch_size=int(summary.get("config", {}).get("batch_size", 128)),
+                    horizon=int(summary.get("config", {}).get("plan_horizon", 5)),
+                    n_runs=25,
+                    device=device,
+                )
+            except Exception as exc:
+                print(f"Benchmark failed for {run_name}: {exc}")
+
+        rows.append(
+            {
+                "run_name": run_name,
+                "algorithm": summary.get("algorithm", run_name),
+                "environment": summary.get("environment", "---"),
+                "total_timesteps": str(summary.get("total_timesteps", "---")),
+                "best_eval_mean_reward": _format_metric(summary.get("best_eval_mean_reward"), digits=3),
+                "final_logged_reward": _format_metric(final_reward, digits=3),
+                "final_latent_mse": _format_metric(latent_mse, digits=6),
+                "ms_per_world_model_rollout": _format_metric(benchmark_ms, digits=2) if benchmark_ms is not None else "---",
+                "metrics_jsonl": str(record.get("metrics_path") or "---"),
+                "eval_npz": str(record.get("eval_npz_path") or "---"),
+            }
+        )
+    return rows
+
+
+def _write_comparison_table(rows: list[dict[str, str]], output_path: str) -> None:
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    fieldnames = [
+        "run_name",
+        "algorithm",
+        "environment",
+        "total_timesteps",
+        "best_eval_mean_reward",
+        "final_logged_reward",
+        "final_latent_mse",
+        "ms_per_world_model_rollout",
+        "metrics_jsonl",
+        "eval_npz",
+    ]
+    with open(output_path, "w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
-        
-        # We synthesize the table from the loaded metrics, rollout errors and benchmarks.
-        def get_final_reward(config_path):
-            from evaluation.compare_plots import load_metrics_jsonl
-            t, r = load_metrics_jsonl(config_path)
-            if t is not None and len(r) > 0:
-                return f"{r[-1]:.1f}"
-            return "---"
+        writer.writerows(rows)
 
-        for name, model_obj in models.items():
-            base_col_name = name
-            config_key = name.replace(" (", " ").replace(")", "")
-            
-            # Fetch reward
-            walker_200k = get_final_reward(configs.get(config_key, ""))
-            
-            # Formulate the error at H10
-            err_h10 = "---"
-            short_name = name.split()[-1].strip("()")
-            if short_name in error_curves:
-                err_h10 = f"{error_curves[short_name][-1]:.3f}"
-                
-            # Benchmark
-            ms_upd = benchmark_results.get(name)
-            ms_str = f"{ms_upd:.2f}" if ms_upd else "---"
-            
-            writer.writerow({
-                "Algorithm": name,
-                "Walker 200k": walker_200k,
-                "Cheetah 200k": "---",  # Not trained in these logs
-                "Hopper 200k": "---",   # Not trained in these logs
-                "Rollout MSE H10": err_h10,
-                "ms/update": ms_str
-            })
 
-    print("\nPhase 4 execution completed. Check artifacts/evaluation_pngs/ directory.")
+def _write_report(run_records: dict[str, dict], rows: list[dict[str, str]], output_path: str) -> None:
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    tdmpc_rows = [row for row in rows if "TD-MPC2" in row["algorithm"] and row["final_latent_mse"] != "---"]
+    tdmpc_rows.sort(key=lambda row: float(row["final_latent_mse"]), reverse=True)
+
+    with open(output_path, "w", encoding="utf-8") as handle:
+        handle.write("# Evaluation Report\n\n")
+        handle.write("This report is sourced from saved `artifacts/*/metrics.jsonl`, `artifacts/*/summary.json`, and `logs/*/eval/evaluations.npz`.\n\n")
+        if tdmpc_rows:
+            handle.write("## Latent MSE Ranking\n\n")
+            for row in tdmpc_rows:
+                handle.write(
+                    f"- {row['run_name']}: latent MSE `{row['final_latent_mse']}`, "
+                    f"final logged reward `{row['final_logged_reward']}`\n"
+                )
+            handle.write("\n")
+
+
+def main(artifacts_root: str = "artifacts", output_dir: str = "artifacts/evaluation_pngs") -> None:
+    print("Running evaluation from saved artifacts and logs...")
+    os.makedirs(output_dir, exist_ok=True)
+    device = _device_for_eval()
+
+    run_records = discover_runs(artifacts_root=artifacts_root)
+    if not run_records:
+        raise FileNotFoundError(f"No run summaries found under {artifacts_root!r}.")
+
+    print("Plotting reward curves...")
+    plot_reward_curves(run_records, os.path.join(output_dir, "fig1_reward_curves.png"))
+
+    print("Plotting sample efficiency...")
+    plot_sample_efficiency(run_records, save_path=os.path.join(output_dir, "fig4_sample_efficiency.png"))
+
+    rows = _build_comparison_rows(run_records, device=device)
+    comparison_table_path = os.path.join(output_dir, "comparison_table.csv")
+    _write_comparison_table(rows, comparison_table_path)
+    _write_report(run_records, rows, os.path.join(output_dir, "report.md"))
+
+    print(f"Wrote {comparison_table_path}")
+    print(f"Phase 4 execution completed. Check {output_dir}/")
+
 
 if __name__ == "__main__":
     main()

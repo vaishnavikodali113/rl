@@ -29,16 +29,9 @@ class SimNorm(nn.Module):
             x = x.softmax(dim=-1)
             return x.view(*shape)
 
-        # Keep a robust fallback for non-divisible latent sizes by normalizing
-        # fixed-size groups and a final smaller remainder group.
-        out = torch.empty_like(x)
-        offset = 0
-        for _ in range(full):
-            out[..., offset : offset + self.dim] = x[..., offset : offset + self.dim].softmax(dim=-1)
-            offset += self.dim
-        if rem > 0:
-            out[..., offset:] = x[..., offset:].softmax(dim=-1)
-        return out
+        main = x[..., : full * self.dim].reshape(*x.shape[:-1], full, self.dim).softmax(dim=-1)
+        remainder = x[..., full * self.dim :].softmax(dim=-1)
+        return torch.cat([main.reshape(*x.shape[:-1], full * self.dim), remainder], dim=-1)
 
     def extra_repr(self) -> str:
         return f"simnorm_dim={self.dim}, feature_dim={self.feature_dim}"

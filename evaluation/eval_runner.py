@@ -1,52 +1,69 @@
 import numpy as np
-import json
 import torch
 
 from env_setup import make_env
 
-def _clone_hidden_state(dynamics):
-    hidden = getattr(dynamics, "_hidden", None)
-    return hidden.clone() if hidden is not None else None
+def _reset_model_hidden(model, batch_size: int, device: torch.device | str) -> None:
+    if hasattr(model.dynamics, "reset_hidden"):
+        model.dynamics.reset_hidden(batch_size=batch_size, device=device)
 
 
-def evaluate_policy(model, env, n_episodes=20, device='cpu'):
+def _planner_from_config(model, action_dim: int, planner_config: dict | None = None):
+    from planning.mppi import MPPI
+
+    config = dict(planner_config or getattr(model, "planner_config", {}) or {})
+    return MPPI(
+        model,
+        action_dim,
+        horizon=config.get("horizon", config.get("plan_horizon", 5)),
+        n_samples=config.get("n_samples", config.get("plan_samples", 512)),
+        temperature=config.get("temperature", config.get("plan_temperature", 0.5)),
+        gamma=config.get("gamma", 0.99),
+        noise_scale=config.get("noise_scale", 0.25),
+    )
+
+
+def evaluate_policy(model, env, n_episodes=20, device='cpu', planner_config: dict | None = None):
     """
     Run model in env for n_episodes using MPPI planning.
     Returns: mean_reward, std_reward
     """
-    from planning.mppi import MPPI
-    planner = MPPI(model, env.action_space.shape[0], horizon=5, n_samples=512)
+    device = torch.device(device)
+    planner = _planner_from_config(model, env.action_space.shape[0], planner_config=planner_config)
     episode_rewards = []
     for _ in range(n_episodes):
         obs = env.reset()
-        obs_tensor = torch.tensor(obs[0], dtype=torch.float32, device=device).unsqueeze(0)
-        z = model.encoder(obs_tensor)
+        obs_value = obs[0] if isinstance(obs, tuple) else obs
         total_reward = 0.0
         done = False
-        env_hidden = None
-        if hasattr(model.dynamics, "reset_hidden"):
-            model.dynamics.reset_hidden(batch_size=1, device=device)
-            env_hidden = _clone_hidden_state(model.dynamics)
+        _reset_model_hidden(model, batch_size=1, device=device)
         while not done:
-            z_prev = z
-            if hasattr(model.dynamics, "_hidden"):
-                model.dynamics._hidden = env_hidden.clone() if env_hidden is not None else None
-            action_tensor = planner.plan(z, device)
+            obs_tensor = torch.as_tensor(obs_value, dtype=torch.float32, device=device).unsqueeze(0)
+            with torch.no_grad():
+                z = model.encoder(obs_tensor)
+                env_hidden = (
+                    model.dynamics.snapshot_hidden()
+                    if hasattr(model.dynamics, "snapshot_hidden")
+                    else None
+                )
+                action_tensor = planner.plan(z, device)
+                if hasattr(model.dynamics, "restore_hidden"):
+                    model.dynamics.restore_hidden(env_hidden)
             action = action_tensor.squeeze(0).cpu().numpy()
-            if hasattr(model.dynamics, "_hidden"):
-                model.dynamics._hidden = env_hidden.clone() if env_hidden is not None else None
+            with torch.no_grad():
+                if hasattr(model.dynamics, "restore_hidden"):
+                    model.dynamics.restore_hidden(env_hidden)
+                _ = model.dynamics(z, action_tensor)
+                if hasattr(model.dynamics, "snapshot_hidden"):
+                    env_hidden = model.dynamics.snapshot_hidden()
             obs, reward, done, *_ = env.step(action)
-            obs_tensor = torch.tensor(obs[0], dtype=torch.float32, device=device).unsqueeze(0)
-            z = model.encoder(obs_tensor)
-            if hasattr(model.dynamics, "_hidden"):
-                with torch.no_grad():
-                    _ = model.dynamics(z_prev, action_tensor)
-                env_hidden = _clone_hidden_state(model.dynamics)
-            total_reward += float(reward[0])
+            obs_value = obs[0] if isinstance(obs, tuple) else obs
+            reward_value = reward[0] if isinstance(reward, (tuple, list, np.ndarray)) else reward
+            total_reward += float(reward_value)
         episode_rewards.append(total_reward)
     return np.mean(episode_rewards), np.std(episode_rewards)
 
-def run_all_evaluations(algorithms: dict, env_name="walker", task="walk", n_episodes=20, device="cpu"):
+def run_all_evaluations(algorithms: dict, env_name="walker", task="walk", n_episodes=20, device="cpu", planner_configs: dict[str, dict] | None = None):
     """
     algorithms: {"ppo_walker": model_obj, "tdmpc2_s5": model_obj, ...}
     Saves results to logs/comparison_table.csv
@@ -56,7 +73,7 @@ def run_all_evaluations(algorithms: dict, env_name="walker", task="walk", n_epis
     for name, model in algorithms.items():
         model.to(device)
         model.eval()
-        mean, std = evaluate_policy(model, env, n_episodes, device=device)
+        mean, std = evaluate_policy(model, env, n_episodes, device=device, planner_config=(planner_configs or {}).get(name))
         results[name] = {"mean_reward": mean, "std_reward": std}
         print(f"{name}: {mean:.1f} ± {std:.1f}")
     

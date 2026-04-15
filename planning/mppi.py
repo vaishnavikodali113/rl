@@ -34,6 +34,12 @@ class MPPI:
         self._a_low_tensor: torch.Tensor | None = None
         self._a_high_tensor: torch.Tensor | None = None
 
+    def _planning_temperature(self, total_rewards: torch.Tensor) -> torch.Tensor:
+        temp = torch.as_tensor(self.temp, device=total_rewards.device, dtype=total_rewards.dtype)
+        safe_temp = torch.clamp(temp, min=1e-3)
+        logits = total_rewards / safe_temp
+        return logits - logits.max(dim=-1, keepdim=True).values
+
     @torch.no_grad()
     def plan(self, z: torch.Tensor, device: torch.device | str) -> torch.Tensor:
         batch_size, latent_dim = z.shape
@@ -61,7 +67,7 @@ class MPPI:
         finally:
             self._restore_dropout_modes(dropout_modules, dropout_states)
 
-        weights = F.softmax(total_rewards / max(self.temp, 1e-6), dim=-1)
+        weights = F.softmax(self._planning_temperature(total_rewards), dim=-1)
         first_actions = actions[0].reshape(batch_size, self.N, self.action_dim)
         best_action = (weights.unsqueeze(-1) * first_actions).sum(dim=1)
         self._update_nominal_sequence(actions, weights, batch_size)
