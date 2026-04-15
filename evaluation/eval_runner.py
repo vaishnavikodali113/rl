@@ -4,6 +4,11 @@ import torch
 
 from env_setup import make_env
 
+def _clone_hidden_state(dynamics):
+    hidden = getattr(dynamics, "_hidden", None)
+    return hidden.clone() if hidden is not None else None
+
+
 def evaluate_policy(model, env, n_episodes=20, device='cpu'):
     """
     Run model in env for n_episodes using MPPI planning.
@@ -18,13 +23,25 @@ def evaluate_policy(model, env, n_episodes=20, device='cpu'):
         z = model.encoder(obs_tensor)
         total_reward = 0.0
         done = False
+        env_hidden = None
+        if hasattr(model.dynamics, "reset_hidden"):
+            model.dynamics.reset_hidden(batch_size=1, device=device)
+            env_hidden = _clone_hidden_state(model.dynamics)
         while not done:
-            if hasattr(model.dynamics, 'reset_hidden'):
-                model.dynamics.reset_hidden(planner.N)
-            action = planner.plan(z, device).squeeze(0).cpu().numpy()
+            z_prev = z
+            if hasattr(model.dynamics, "_hidden"):
+                model.dynamics._hidden = env_hidden.clone() if env_hidden is not None else None
+            action_tensor = planner.plan(z, device)
+            action = action_tensor.squeeze(0).cpu().numpy()
+            if hasattr(model.dynamics, "_hidden"):
+                model.dynamics._hidden = env_hidden.clone() if env_hidden is not None else None
             obs, reward, done, *_ = env.step(action)
             obs_tensor = torch.tensor(obs[0], dtype=torch.float32, device=device).unsqueeze(0)
             z = model.encoder(obs_tensor)
+            if hasattr(model.dynamics, "_hidden"):
+                with torch.no_grad():
+                    _ = model.dynamics(z_prev, action_tensor)
+                env_hidden = _clone_hidden_state(model.dynamics)
             total_reward += float(reward[0])
         episode_rewards.append(total_reward)
     return np.mean(episode_rewards), np.std(episode_rewards)

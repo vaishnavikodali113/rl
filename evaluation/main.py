@@ -4,7 +4,7 @@ import os
 
 from evaluation.eval_runner import run_all_evaluations
 from evaluation.rollout_error import compute_horizon_error_curve, plot_rollout_errors
-from evaluation.compare_plots import plot_reward_curves, plot_planning_stability, plot_sample_efficiency
+from evaluation.compare_plots import plot_reward_curves, plot_sample_efficiency
 from evaluation.benchmark import benchmark_update_step
 from tdmpc2.model import TDMPC2Model
 
@@ -37,7 +37,6 @@ def main():
     action_dim = env.action_space.shape[0] if len(env.action_space.shape) > 0 else 6
     
     latent_dim = 64
-    assert latent_dim % 8 == 0, "SimNorm requires the latent dimension to be divisible by the group size of 8"
     
     models = {
         "TD-MPC2 (MLP)": TDMPC2Model(obs_dim, action_dim, dynamics_type="mlp", latent_dim=latent_dim),
@@ -50,7 +49,7 @@ def main():
     for name, model in models.items():
         print(f"Benchmarking {name}...")
         try:
-            ms = benchmark_update_step(model, device='cpu')
+            ms = benchmark_update_step(model, device=device)
             benchmark_results[name] = ms
             print(f"  {ms:.2f} ms")
         except Exception as e:
@@ -63,7 +62,7 @@ def main():
     test_seqs = [ (torch.randn(11, obs_dim), torch.randn(10, action_dim)) for _ in range(5)]
     for name, model in models.items():
         try:
-            err = compute_horizon_error_curve(model, test_seqs, max_horizon=10, device='cpu')
+            err = compute_horizon_error_curve(model, test_seqs, max_horizon=10, device=device)
             error_curves[name.split()[-1].strip("()")] = err
         except Exception as e:
             print(f"Failed error curve for {name}: {e}")
@@ -71,12 +70,7 @@ def main():
     if error_curves:
         plot_rollout_errors(error_curves, "artifacts/evaluation_pngs/fig2_rollout_error.png")
         
-    print("Plotting stability (mocked for visualization)...")
-    stability_res = {
-        "MLP H=5": 140, "MLP H=10": 90,
-        "S5 H=5": 160, "S5 H=10": 155
-    }
-    plot_planning_stability(stability_res, "artifacts/evaluation_pngs/fig3_planning_stability.png")
+    print("Skipping planning stability plot: no measured stability dataset found.")
     
     # Optional: the user requested to run the policy in real environments to save in CSV.
     # However since we lack `dm_control` on system, and training artifacts might not
