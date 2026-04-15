@@ -106,6 +106,49 @@ def _nearest_checkpoint_value(
     return float(values[idx])
 
 
+def _latest_value_at_or_before(
+    timesteps: np.ndarray,
+    values: np.ndarray,
+    checkpoint: int,
+) -> float | None:
+    if len(timesteps) == 0:
+        return None
+    eligible = np.where(timesteps <= checkpoint)[0]
+    if len(eligible) == 0:
+        return None
+    return float(values[int(eligible[-1])])
+
+
+def _nice_step(value: int) -> int:
+    if value <= 0:
+        return 1
+    magnitude = 10 ** max(len(str(value)) - 1, 0)
+    for factor in (1, 2, 5, 10):
+        candidate = factor * magnitude
+        if candidate >= value:
+            return candidate
+    return 10 * magnitude
+
+
+def _shared_checkpoints(run_records: list[tuple[dict, np.ndarray, np.ndarray]], n_points: int) -> tuple[int, ...]:
+    if not run_records:
+        return tuple()
+    shared_max = min(int(timesteps.max()) for _, timesteps, _ in run_records if len(timesteps) > 0)
+    if shared_max <= 0:
+        return tuple()
+    raw_points = np.linspace(shared_max / max(n_points, 1), shared_max, num=n_points)
+    checkpoints = []
+    for point in raw_points:
+        checkpoint = _nice_step(int(point))
+        checkpoint = min(checkpoint, shared_max)
+        checkpoints.append(checkpoint)
+    ordered = []
+    for checkpoint in checkpoints:
+        if checkpoint not in ordered:
+            ordered.append(checkpoint)
+    return tuple(ordered)
+
+
 def plot_reward_curves(run_records: dict[str, dict], save_path="logs/fig1_reward_curves.png"):
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     colors = ["#95a5a6", "#e67e22", "#e74c3c", "#2ecc71", "#3498db", "#9b59b6"]
@@ -155,8 +198,6 @@ def plot_planning_stability(results: dict, save_path="logs/fig3_planning_stabili
 def plot_sample_efficiency(run_records: dict[str, dict], checkpoints=(50_000, 100_000, 200_000), save_path="logs/fig4_sample_efficiency.png"):
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     fig, ax = plt.subplots(figsize=(9, 5))
-    x = np.arange(len(checkpoints))
-    bar_width = 0.8 / max(len(run_records), 1)
 
     valid_records = []
     for record in run_records.values():
@@ -164,15 +205,30 @@ def plot_sample_efficiency(run_records: dict[str, dict], checkpoints=(50_000, 10
         if timesteps is not None and len(timesteps) > 0:
             valid_records.append((record, timesteps, rewards))
 
+    resolved_checkpoints = tuple(checkpoints)
+    supported_runs = 0
+    for checkpoint in resolved_checkpoints:
+        supported_runs += sum(
+            _latest_value_at_or_before(timesteps, rewards, checkpoint) is not None
+            for _, timesteps, rewards in valid_records
+        )
+    if supported_runs == 0:
+        resolved_checkpoints = _shared_checkpoints(valid_records, len(checkpoints))
+    if not resolved_checkpoints:
+        raise ValueError("No checkpoints could be derived from available run data.")
+
+    x = np.arange(len(resolved_checkpoints))
+    bar_width = 0.8 / max(len(valid_records), 1)
+
     for i, (record, timesteps, rewards) in enumerate(valid_records):
         heights = []
-        for checkpoint in checkpoints:
-            value = _nearest_checkpoint_value(timesteps, rewards, checkpoint)
+        for checkpoint in resolved_checkpoints:
+            value = _latest_value_at_or_before(timesteps, rewards, checkpoint)
             heights.append(np.nan if value is None else value)
         ax.bar(x + i * bar_width, heights, bar_width, label=record["algorithm"], alpha=0.85)
 
     ax.set_xticks(x + bar_width * max(len(valid_records) - 1, 0) / 2)
-    ax.set_xticklabels([f"{ck // 1000}k steps" for ck in checkpoints], fontsize=11)
+    ax.set_xticklabels([f"{ck // 1000}k steps" for ck in resolved_checkpoints], fontsize=11)
     ax.set_ylabel("Mean Reward at Checkpoint", fontsize=13)
     ax.set_title("Sample Efficiency Comparison", fontsize=14)
     ax.legend(fontsize=9)
