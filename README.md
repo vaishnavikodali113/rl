@@ -17,6 +17,8 @@ If no accelerator is available, the scripts fall back to CPU automatically.
 
 ```text
 rl/
+├── dashboard/              # Next.js visual dashboard
+├── server/                 # FastAPI + WebSocket visualization backend
 ├── main.py                 # Unified CLI entry point
 ├── run_layout.py           # Shared run directory initialization
 ├── artifact_logging.py     # JSONL artifact callback

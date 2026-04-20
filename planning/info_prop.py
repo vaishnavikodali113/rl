@@ -33,10 +33,11 @@ class InfoProp:
     @torch.no_grad()
     def compute_uncertainty(self, z: torch.Tensor, a: torch.Tensor) -> torch.Tensor:
         dynamics = self.model.dynamics
-        if hasattr(dynamics, "_hidden"):
-            hidden_backup = dynamics._hidden.clone() if dynamics._hidden is not None else None
-        else:
-            hidden_backup = None
+        hidden_backup = (
+            dynamics.snapshot_hidden()
+            if hasattr(dynamics, "snapshot_hidden")
+            else None
+        )
 
         dropout_modules = []
         dropout_states = []
@@ -49,14 +50,14 @@ class InfoProp:
         preds = []
         try:
             for _ in range(self.K):
-                if hidden_backup is not None and hasattr(dynamics, "_hidden"):
-                    dynamics._hidden = hidden_backup.clone()
+                if hasattr(dynamics, "restore_hidden"):
+                    dynamics.restore_hidden(hidden_backup)
                 preds.append(dynamics(z, a))
         finally:
             for module, state in zip(dropout_modules, dropout_states):
                 module.train(state)
-            if hasattr(dynamics, "_hidden"):
-                dynamics._hidden = hidden_backup.clone() if hidden_backup is not None else None
+            if hasattr(dynamics, "restore_hidden"):
+                dynamics.restore_hidden(hidden_backup)
 
         stacked = torch.stack(preds, dim=0)
         var_est = stacked.var(dim=0).mean(dim=-1)
@@ -108,26 +109,24 @@ class InfoProp:
             if certain.any():
                 rewards = self.model.reward(z[certain], a_t[certain])
                 total[certain] += discounts[t] * rewards
-                
-                # Performance Optimization: Mask the dynamics call to skip dead trajectories.
-                # We save the full hidden state, slice it for the active batch,
-                # compute the step, and then scatter the results back.
-                full_hidden = None
-                if hasattr(self.model.dynamics, "_hidden") and self.model.dynamics._hidden is not None:
-                    full_hidden = self.model.dynamics._hidden
-                    self.model.dynamics._hidden = full_hidden[certain]
-                
-                # Compute next state only for certain trajectories
+
+                full_hidden = (
+                    self.model.dynamics.snapshot_hidden()
+                    if hasattr(self.model.dynamics, "snapshot_hidden")
+                    else None
+                )
+                if full_hidden is not None and hasattr(self.model.dynamics, "restore_hidden"):
+                    self.model.dynamics.restore_hidden(full_hidden[certain])
+
                 z_next_subset = self.model.dynamics(z[certain], a_t[certain])
-                
-                # Update latent state
-                z = z.clone() # Ensure no side-effects on the original z tensor
+
+                z = z.clone()
                 z[certain] = z_next_subset
-                
-                # Restore and update hidden state
-                if full_hidden is not None:
-                    full_hidden[certain] = self.model.dynamics._hidden
-                    self.model.dynamics._hidden = full_hidden
+
+                if full_hidden is not None and hasattr(self.model.dynamics, "snapshot_hidden"):
+                    updated_hidden = self.model.dynamics.snapshot_hidden()
+                    full_hidden[certain] = updated_hidden
+                    self.model.dynamics.restore_hidden(full_hidden)
 
             active = certain
 

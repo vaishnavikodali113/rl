@@ -48,6 +48,17 @@ class SSMDynamics(nn.Module):
         if self._hidden is not None:
             self._hidden = self._hidden.detach()
 
+    def snapshot_hidden(self) -> torch.Tensor | None:
+        if self._hidden is None:
+            return None
+        return self._hidden.detach().clone()
+
+    def restore_hidden(self, hidden: torch.Tensor | None) -> None:
+        if hidden is None:
+            self._hidden = None
+            return
+        self._hidden = hidden.detach().clone()
+
     def reset_hidden(self, batch_size: int, device: torch.device | str | None = None) -> None:
         if device is None:
             device = next(self.parameters()).device

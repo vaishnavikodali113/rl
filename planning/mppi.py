@@ -34,35 +34,59 @@ class MPPI:
         self._a_low_tensor: torch.Tensor | None = None
         self._a_high_tensor: torch.Tensor | None = None
 
+    def _planning_temperature(self, total_rewards: torch.Tensor) -> torch.Tensor:
+        temp = torch.as_tensor(self.temp, device=total_rewards.device, dtype=total_rewards.dtype)
+        safe_temp = torch.clamp(temp, min=1e-3)
+        logits = total_rewards / safe_temp
+        return logits - logits.max(dim=-1, keepdim=True).values
+
     @torch.no_grad()
     def plan(self, z: torch.Tensor, device: torch.device | str) -> torch.Tensor:
         batch_size, latent_dim = z.shape
+        dropout_modules, dropout_states = self._enable_dropout_for_planning()
+        try:
+            actions = self._sample_action_sequences(batch_size, device)
+            z_expand = z.unsqueeze(1).expand(-1, self.N, -1).reshape(batch_size * self.N, latent_dim)
 
-        actions = self._sample_action_sequences(batch_size, device)
-        z_expand = z.unsqueeze(1).expand(-1, self.N, -1).reshape(batch_size * self.N, latent_dim)
+            if hasattr(self.model.dynamics, "reset_hidden"):
+                self.model.dynamics.reset_hidden(batch_size * self.N, device)
 
-        if hasattr(self.model.dynamics, "reset_hidden"):
-            self.model.dynamics.reset_hidden(batch_size * self.N, device)
+            if self.info_prop is not None:
+                returns = self.info_prop.plan_with_truncation(z_expand, actions, device)
+                total_rewards = returns.reshape(batch_size, self.N)
+            else:
+                returns = torch.zeros(batch_size * self.N, device=device)
+                discounts = torch.pow(self.gamma, torch.arange(self.H, device=device, dtype=torch.float32))
 
-        if self.info_prop is not None:
-            returns = self.info_prop.plan_with_truncation(z_expand, actions, device)
-            total_rewards = returns.reshape(batch_size, self.N)
-        else:
-            returns = torch.zeros(batch_size * self.N, device=device)
-            discounts = torch.pow(self.gamma, torch.arange(self.H, device=device, dtype=torch.float32))
+                z_curr = z_expand
+                for t in range(self.H):
+                    rewards = self.model.reward(z_curr, actions[t])
+                    returns += discounts[t] * rewards
+                    z_curr = self.model.dynamics(z_curr, actions[t])
+                total_rewards = returns.reshape(batch_size, self.N)
+        finally:
+            self._restore_dropout_modes(dropout_modules, dropout_states)
 
-            z_curr = z_expand
-            for t in range(self.H):
-                rewards = self.model.reward(z_curr, actions[t])
-                returns += discounts[t] * rewards
-                z_curr = self.model.dynamics(z_curr, actions[t])
-            total_rewards = returns.reshape(batch_size, self.N)
-
-        weights = F.softmax(total_rewards / max(self.temp, 1e-6), dim=-1)
+        weights = F.softmax(self._planning_temperature(total_rewards), dim=-1)
         first_actions = actions[0].reshape(batch_size, self.N, self.action_dim)
         best_action = (weights.unsqueeze(-1) * first_actions).sum(dim=1)
         self._update_nominal_sequence(actions, weights, batch_size)
         return torch.clamp(best_action, min=self._to_tensor(self.a_low, device), max=self._to_tensor(self.a_high, device))
+
+    def _enable_dropout_for_planning(self):
+        modules = []
+        states = []
+        for module in self.model.modules():
+            if isinstance(module, torch.nn.Dropout):
+                modules.append(module)
+                states.append(module.training)
+                module.train(True)
+        return modules, states
+
+    @staticmethod
+    def _restore_dropout_modes(modules, states) -> None:
+        for module, state in zip(modules, states):
+            module.train(state)
 
     def _sample_action_sequences(self, batch_size: int, device: torch.device | str) -> torch.Tensor:
         low = self._to_tensor(self.a_low, device).view(1, 1, self.action_dim)
