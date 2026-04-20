@@ -194,7 +194,7 @@ python app.py status
 You can still start the backend with plain `uvicorn` if you prefer:
 
 ```bash
-uvicorn app:app --reload --host 0.0.0.0 --port 8000
+python -m uvicorn server.server:app --host 0.0.0.0 --port 8001
 ```
 
 Or run the frontend separately in a second terminal:
