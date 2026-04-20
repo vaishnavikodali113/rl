@@ -10,9 +10,13 @@ def build_parser():
             "ppo",
             "sac",
             "tdmpc",
+            "tdmpc-cheetah",
             "tdmpc-s4",
+            "tdmpc-cheetah-s4",
             "tdmpc-s5",
+            "tdmpc-cheetah-s5",
             "tdmpc-mamba",
+            "tdmpc-cheetah-mamba",
             "phase3",
             "plot",
             "all-phases",
@@ -67,10 +71,24 @@ def main():
             total_steps=args.total_steps,
             max_wall_clock_seconds=args.max_wall_clock_seconds,
         )
+    elif args.command == "tdmpc-cheetah":
+        from train_tdmpc2_cheetah import main as train_tdmpc_cheetah_main
+
+        train_tdmpc_cheetah_main(
+            total_steps=args.total_steps,
+            max_wall_clock_seconds=args.max_wall_clock_seconds,
+        )
     elif args.command == "tdmpc-s4":
         from train_tdmpc2_s4 import main as train_tdmpc_s4_main
 
         train_tdmpc_s4_main(
+            total_steps=args.total_steps,
+            max_wall_clock_seconds=args.max_wall_clock_seconds,
+        )
+    elif args.command == "tdmpc-cheetah-s4":
+        from train_tdmpc2_cheetah_s4 import main as train_tdmpc_cheetah_s4_main
+
+        train_tdmpc_cheetah_s4_main(
             total_steps=args.total_steps,
             max_wall_clock_seconds=args.max_wall_clock_seconds,
         )
@@ -81,10 +99,24 @@ def main():
             total_steps=args.total_steps,
             max_wall_clock_seconds=args.max_wall_clock_seconds,
         )
+    elif args.command == "tdmpc-cheetah-s5":
+        from train_tdmpc2_cheetah_s5 import main as train_tdmpc_cheetah_s5_main
+
+        train_tdmpc_cheetah_s5_main(
+            total_steps=args.total_steps,
+            max_wall_clock_seconds=args.max_wall_clock_seconds,
+        )
     elif args.command == "tdmpc-mamba":
         from train_tdmpc2_mamba import main as train_tdmpc_mamba_main
 
         train_tdmpc_mamba_main(
+            total_steps=args.total_steps,
+            max_wall_clock_seconds=args.max_wall_clock_seconds,
+        )
+    elif args.command == "tdmpc-cheetah-mamba":
+        from train_tdmpc2_cheetah_mamba import main as train_tdmpc_cheetah_mamba_main
+
+        train_tdmpc_cheetah_mamba_main(
             total_steps=args.total_steps,
             max_wall_clock_seconds=args.max_wall_clock_seconds,
         )

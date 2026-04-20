@@ -222,6 +222,20 @@ Training output stored in artifacts/tdmpc2_walker_mlp/metrics.jsonl and artifact
 
 During the run, metrics are logged every `1,000` steps, giving 10 log checkpoints up to 10,000.
 
+### Train TD-MPC2 with MLP dynamics on Cheetah-Run
+
+```bash
+python main.py tdmpc-cheetah
+```
+
+### Train TD-MPC2 structured variants on Cheetah-Run
+
+```bash
+python main.py tdmpc-cheetah-s4
+python main.py tdmpc-cheetah-s5
+python main.py tdmpc-cheetah-mamba
+```
+
 To train the same Phase 1 baseline on other domains directly:
 
 ```bash
