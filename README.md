@@ -168,6 +168,48 @@ PY
 
 From the repo root after activating the virtual environment:
 
+### Run the visualization stack
+
+The new root launcher can run the backend directly and, when needed, bring up
+the dashboard dev server with the backend URLs wired automatically.
+
+Serve the FastAPI backend only:
+
+```bash
+python app.py serve --frontend static
+```
+
+Serve backend + Vite dashboard together for development:
+
+```bash
+python app.py serve --frontend dev --reload
+```
+
+Check which artifacts and frontend assets are available:
+
+```bash
+python app.py status
+```
+
+You can still start the backend with plain `uvicorn` if you prefer:
+
+```bash
+uvicorn app:app --reload --host 0.0.0.0 --port 8000
+```
+
+Or run the frontend separately in a second terminal:
+
+```bash
+cd dashboard
+npm install
+npm run dev
+```
+
+The Vite dev server now proxies `/ws`, `/metrics`, `/artifacts`, and `/health`
+to the backend on port `8000`, so the dashboard and API stay connected without
+hardcoded URLs. In production, build the dashboard with `npm run build`; the
+FastAPI server will serve `dashboard/dist` directly on `http://localhost:8000`.
+
 ### Smoke test the environment
 
 ```bash
