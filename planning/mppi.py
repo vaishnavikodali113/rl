@@ -42,8 +42,14 @@ class MPPI:
 
     @torch.no_grad()
     def plan(self, z: torch.Tensor, device: torch.device | str) -> torch.Tensor:
+        device = torch.device(device)
         batch_size, latent_dim = z.shape
         dropout_modules, dropout_states = self._enable_dropout_for_planning()
+        hidden_backup = (
+            self.model.dynamics.snapshot_hidden()
+            if hasattr(self.model.dynamics, "snapshot_hidden")
+            else None
+        )
         try:
             actions = self._sample_action_sequences(batch_size, device)
             z_expand = z.unsqueeze(1).expand(-1, self.N, -1).reshape(batch_size * self.N, latent_dim)
@@ -65,6 +71,8 @@ class MPPI:
                     z_curr = self.model.dynamics(z_curr, actions[t])
                 total_rewards = returns.reshape(batch_size, self.N)
         finally:
+            if hasattr(self.model.dynamics, "restore_hidden"):
+                self.model.dynamics.restore_hidden(hidden_backup)
             self._restore_dropout_modes(dropout_modules, dropout_states)
 
         weights = F.softmax(self._planning_temperature(total_rewards), dim=-1)
@@ -99,6 +107,7 @@ class MPPI:
         return candidates.reshape(self.H, batch_size * self.N, self.action_dim)
 
     def _get_nominal_sequence(self, batch_size: int, device: torch.device | str) -> torch.Tensor:
+        device = torch.device(device)
         if (
             self._nominal_actions is None
             or self._nominal_actions.shape[1] != batch_size

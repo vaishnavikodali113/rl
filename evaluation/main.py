@@ -14,7 +14,6 @@ from evaluation.compare_plots import (
     plot_reward_curves,
     plot_sample_efficiency,
 )
-from tdmpc2.model import TDMPC2Model
 
 
 def _device_for_eval() -> str:
@@ -37,7 +36,13 @@ def _checkpoint_path(summary: dict) -> str | None:
     return None
 
 
-def _build_model_from_checkpoint(run_record: dict, device: str) -> TDMPC2Model | None:
+def _build_model_from_checkpoint(run_record: dict, device: str):
+    try:
+        from tdmpc2.model import TDMPC2Model
+    except ModuleNotFoundError as exc:
+        print(f"Skipping checkpoint model load for {run_record['run_name']}: {exc}")
+        return None
+
     summary = run_record["summary"]
     algorithm = str(summary.get("algorithm", "")).lower()
     if "td-mpc2" not in algorithm:
@@ -197,7 +202,7 @@ def main(artifacts_root: str = "artifacts", output_dir: str = "artifacts/evaluat
     _write_report(run_records, rows, os.path.join(output_dir, "report.md"))
 
     print(f"Wrote {comparison_table_path}")
-    print(f"Phase 4 execution completed. Check {output_dir}/")
+    print(f"Evaluation execution completed. Check {output_dir}/")
 
 
 if __name__ == "__main__":

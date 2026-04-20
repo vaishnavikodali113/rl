@@ -3,9 +3,21 @@ import torch
 
 from env_setup import make_env
 
+
 def _reset_model_hidden(model, batch_size: int, device: torch.device | str) -> None:
     if hasattr(model.dynamics, "reset_hidden"):
         model.dynamics.reset_hidden(batch_size=batch_size, device=device)
+
+
+def _snapshot_model_hidden(model):
+    if hasattr(model.dynamics, "snapshot_hidden"):
+        return model.dynamics.snapshot_hidden()
+    return None
+
+
+def _restore_model_hidden(model, hidden) -> None:
+    if hasattr(model.dynamics, "restore_hidden"):
+        model.dynamics.restore_hidden(hidden)
 
 
 def _planner_from_config(model, action_dim: int, planner_config: dict | None = None):
@@ -41,21 +53,14 @@ def evaluate_policy(model, env, n_episodes=20, device='cpu', planner_config: dic
             obs_tensor = torch.as_tensor(obs_value, dtype=torch.float32, device=device).unsqueeze(0)
             with torch.no_grad():
                 z = model.encoder(obs_tensor)
-                env_hidden = (
-                    model.dynamics.snapshot_hidden()
-                    if hasattr(model.dynamics, "snapshot_hidden")
-                    else None
-                )
+                env_hidden = _snapshot_model_hidden(model)
                 action_tensor = planner.plan(z, device)
-                if hasattr(model.dynamics, "restore_hidden"):
-                    model.dynamics.restore_hidden(env_hidden)
+                _restore_model_hidden(model, env_hidden)
             action = action_tensor.squeeze(0).cpu().numpy()
             with torch.no_grad():
-                if hasattr(model.dynamics, "restore_hidden"):
-                    model.dynamics.restore_hidden(env_hidden)
+                _restore_model_hidden(model, env_hidden)
                 _ = model.dynamics(z, action_tensor)
-                if hasattr(model.dynamics, "snapshot_hidden"):
-                    env_hidden = model.dynamics.snapshot_hidden()
+                env_hidden = _snapshot_model_hidden(model)
             obs, reward, done, *_ = env.step(action)
             obs_value = obs[0] if isinstance(obs, tuple) else obs
             reward_value = reward[0] if isinstance(reward, (tuple, list, np.ndarray)) else reward

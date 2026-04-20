@@ -1,6 +1,7 @@
 import time
 import torch
 
+
 def _synchronize_device(device: torch.device | str) -> None:
     device = torch.device(device)
     if device.type == "cpu":
@@ -17,23 +18,30 @@ def benchmark_update_step(model, batch_size=256, horizon=5, n_runs=100, device='
     act_dim = getattr(model, "action_dim", model.reward.net[0].in_features - model.latent_dim)
     obs_dim = getattr(model, "obs_dim", model.encoder.net[0].in_features)
 
+    was_training = model.training
     model.to(device)
     model.train()
     times = []
-    
-    for _ in range(n_runs):
-        obs_seq = torch.randn(horizon + 1, batch_size, obs_dim, device=device)
-        act_seq = torch.randn(horizon, batch_size, act_dim, device=device)
 
-        _synchronize_device(device)
-        start = time.perf_counter()
+    try:
+        for _ in range(n_runs):
+            obs_seq = torch.randn(horizon + 1, batch_size, obs_dim, device=device)
+            act_seq = torch.randn(horizon, batch_size, act_dim, device=device)
 
-        with torch.no_grad():
-            z0 = model.encoder(obs_seq[0])
-            model.rollout(z0, act_seq)
+            if hasattr(model.dynamics, "reset_hidden"):
+                model.dynamics.reset_hidden(batch_size=batch_size, device=device)
 
-        _synchronize_device(device)
-        end = time.perf_counter()
-        times.append((end - start) * 1000)
+            _synchronize_device(device)
+            start = time.perf_counter()
+
+            with torch.no_grad():
+                z0 = model.encoder(obs_seq[0])
+                model.rollout(z0, act_seq)
+
+            _synchronize_device(device)
+            end = time.perf_counter()
+            times.append((end - start) * 1000)
+    finally:
+        model.train(was_training)
 
     return sum(times[10:]) / len(times[10:]) if len(times) > 10 else sum(times) / len(times)

@@ -8,7 +8,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-TDMPC2_REWARD_KEYS = ("eval/mean_reward", "rollout/recent_episode_return")
+TDMPC2_REWARD_KEYS = (
+    "eval/mean_reward",
+    "rollout/ep_rew_mean",
+    "rollout/recent_episode_return",
+)
 ROLLOUT_ERROR_KEYS = ("rollout_error/horizon", "eval/rollout_error_horizon")
 
 
@@ -88,22 +92,6 @@ def load_rollout_error_series(run_record: dict) -> tuple[np.ndarray | None, np.n
     if len(timesteps):
         return timesteps, errors
     return None, None
-
-
-def _nearest_checkpoint_value(
-    timesteps: np.ndarray,
-    values: np.ndarray,
-    checkpoint: int,
-    max_gap_ratio: float = 0.25,
-) -> float | None:
-    if len(timesteps) == 0:
-        return None
-    idx = int(np.abs(timesteps - checkpoint).argmin())
-    total_steps = max(int(timesteps.max()), checkpoint, 1)
-    max_gap = max(1, int(total_steps * max_gap_ratio))
-    if abs(int(timesteps[idx]) - checkpoint) > max_gap:
-        return None
-    return float(values[idx])
 
 
 def _latest_value_at_or_before(
