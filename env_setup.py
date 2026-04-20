@@ -6,7 +6,12 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 
 
 class DMCWrapper(gym.Env):
-    def __init__(self, domain, task, seed=0):
+    metadata = {"render_modes": ["rgb_array"], "render_fps": 20}
+
+    def __init__(self, domain, task, seed=0, render_mode: str | None = None):
+        self.domain = domain
+        self.task = task
+        self.render_mode = render_mode
         self._env = suite.load(domain_name=domain, task_name=task,
                                task_kwargs={"random": seed})
         obs_spec = self._env.observation_spec()
@@ -36,8 +41,19 @@ class DMCWrapper(gym.Env):
             v.flatten() for v in ts.observation.values()
         ]).astype(np.float32)
 
+    def render(self):
+        if self.render_mode != "rgb_array":
+            return None
+        return self._env.physics.render(height=240, width=320, camera_id=0)
 
-def make_env(domain="walker", task="walk", seed=0):
+    def close(self):
+        return None
+
+
+def make_env(domain="walker", task="walk", seed=0, vectorized: bool = True, render_mode: str | None = None):
     def _init():
-        return DMCWrapper(domain, task, seed)
-    return DummyVecEnv([_init])
+        return DMCWrapper(domain, task, seed, render_mode=render_mode)
+
+    if vectorized:
+        return DummyVecEnv([_init])
+    return _init()
