@@ -9,13 +9,17 @@ import {
   CartesianGrid,
 } from "recharts";
 import { useArtifact } from "../hooks/use-artifact";
-import { ALGO_COLORS, DEFAULT_COLOR } from "../lib/constants";
+import { ALGO_COLORS, DEFAULT_COLOR, EnvironmentFilter, inferEnvironment } from "../lib/constants";
 
 interface TrainingData {
   [algo: string]: { timesteps: number[]; rewards: number[] };
 }
 
-export function TrainingCurves() {
+interface Props {
+  envFilter: EnvironmentFilter;
+}
+
+export function TrainingCurves({ envFilter }: Props) {
   const { data, loading, error } = useArtifact<TrainingData>(
     "/artifacts/reward-curves"
   );
@@ -34,20 +38,34 @@ export function TrainingCurves() {
   if (error) return <p className="text-red-400 text-sm">Error: {error}</p>;
   if (!data) return null;
 
+  const filteredEntries = Object.entries(data).filter(([algo]) => {
+    return envFilter === "all" || inferEnvironment(algo) === envFilter;
+  });
+
+  if (filteredEntries.length === 0) {
+    return (
+      <div className="h-96 flex items-center justify-center text-zinc-500 dark:text-zinc-500">
+        No training curves for the selected environment yet.
+      </div>
+    );
+  }
+
+  const filteredData = Object.fromEntries(filteredEntries);
+
   const allTimesteps = Array.from(
-    new Set(Object.values(data).flatMap((d) => d.timesteps))
+    new Set(Object.values(filteredData).flatMap((d) => d.timesteps))
   ).sort((a, b) => a - b);
 
   const chartData = allTimesteps.map((t) => {
     const point: Record<string, number | undefined> = { timestep: t };
-    Object.entries(data).forEach(([algo, d]) => {
+    Object.entries(filteredData).forEach(([algo, d]) => {
       const idx = d.timesteps.indexOf(t);
       point[algo] = idx >= 0 ? d.rewards[idx] : undefined;
     });
     return point;
   });
 
-  const algos = Object.keys(data);
+  const algos = Object.keys(filteredData);
 
   return (
     <div className="w-full h-96">

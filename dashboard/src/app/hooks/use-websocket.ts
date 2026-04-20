@@ -5,6 +5,10 @@ export interface StepMetric {
   label: string;
   run_name?: string;
   display_name?: string;
+  env_name?: string;
+  task?: string;
+  low_motion_steps?: number;
+  reset_count?: number;
   step: number;
   reward: number;
   episode_reward: number;
@@ -17,6 +21,9 @@ export interface LiveModelCard {
   run_name: string;
   display_name: string;
   algorithm_name: string;
+  env_name: string;
+  task: string;
+  env_theme: string;
   env_title: string;
   behavior_text: string;
 }

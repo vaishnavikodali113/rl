@@ -2,20 +2,35 @@ import json
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import EvalCallback
 from stable_baselines3.common.callbacks import CallbackList
+
 from artifact_logging import JsonLinesMetricCallback, utc_now_iso
 from device_utils import describe_device, get_best_device
 from env_setup import make_env
 from run_layout import init_run_paths
 
 
-def main():
-    run_name = "ppo_walker"
+TASK_DEFAULTS = {
+    "walker": ("walk", "ppo_walker", 50_000),
+    "cheetah": ("run", "ppo_cheetah", 50_000),
+}
+
+
+def main(
+    env_name: str = "walker",
+    task: str | None = None,
+    run_name: str | None = None,
+    total_timesteps: int | None = None,
+):
+    default_task, default_run_name, default_steps = TASK_DEFAULTS[env_name]
+    task = task or default_task
+    run_name = run_name or default_run_name
+    total_timesteps = total_timesteps or default_steps
     device = get_best_device()
     device_description = describe_device()
     paths = init_run_paths(run_name)
 
-    env = make_env("walker", "walk")
-    eval_env = make_env("walker", "walk")
+    env = make_env(env_name, task)
+    eval_env = make_env(env_name, task)
 
     model = PPO(
         "MlpPolicy",
@@ -45,14 +60,13 @@ def main():
     ])
 
     started_at = utc_now_iso()
-    total_timesteps = 50_000
     model.learn(total_timesteps=total_timesteps, callback=callbacks)
     model.save(str(paths.model_path))
 
     summary = {
         "run_name": run_name,
         "algorithm": "PPO",
-        "environment": "walker_walk",
+        "environment": f"{env_name}_{task}",
         "device": device,
         "device_description": device_description,
         "total_timesteps": total_timesteps,

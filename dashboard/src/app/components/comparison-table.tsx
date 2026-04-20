@@ -1,5 +1,6 @@
 import { TrendingUp, Zap, Target, Clock } from "lucide-react";
 import { useArtifact } from "../hooks/use-artifact";
+import { EnvironmentFilter, inferEnvironment } from "../lib/constants";
 
 interface Row {
   algorithm: string;
@@ -16,7 +17,11 @@ const COLUMN_ICONS: Record<string, any> = {
   wall_time: Clock,
 };
 
-export function ComparisonTable() {
+interface Props {
+  envFilter: EnvironmentFilter;
+}
+
+export function ComparisonTable({ envFilter }: Props) {
   const { data, loading, error } = useArtifact<Row[]>(
     "/artifacts/comparison-table"
   );
@@ -40,7 +45,24 @@ export function ComparisonTable() {
       </p>
     );
 
-  const columns = Object.keys(data[0]);
+  const filteredRows = data.filter((row) => {
+    if (envFilter === "all") return true;
+    return (
+      inferEnvironment(row.run_name) === envFilter ||
+      inferEnvironment(row.environment) === envFilter ||
+      inferEnvironment(row.algorithm) === envFilter
+    );
+  });
+
+  if (filteredRows.length === 0) {
+    return (
+      <p className="text-zinc-500 dark:text-zinc-500 text-sm">
+        No comparison rows for the selected environment yet.
+      </p>
+    );
+  }
+
+  const columns = Object.keys(filteredRows[0]);
 
   return (
     <div className="overflow-x-auto rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-xl dark:shadow-none">
@@ -64,7 +86,7 @@ export function ComparisonTable() {
           </tr>
         </thead>
         <tbody className="divide-y divide-zinc-200/50 dark:divide-zinc-800/50 bg-white/60 dark:bg-zinc-900/30">
-          {data.map((row, i) => (
+          {filteredRows.map((row, i) => (
             <tr
               key={i}
               className="hover:bg-blue-50/50 dark:hover:bg-white/5 transition-all duration-150"

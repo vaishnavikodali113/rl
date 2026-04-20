@@ -9,13 +9,17 @@ import {
   CartesianGrid,
 } from "recharts";
 import { useArtifact } from "../hooks/use-artifact";
-import { ALGO_COLORS, DEFAULT_COLOR } from "../lib/constants";
+import { ALGO_COLORS, DEFAULT_COLOR, EnvironmentFilter, inferEnvironment } from "../lib/constants";
 
 interface RolloutErrors {
   [algo: string]: number[];
 }
 
-export function RolloutErrorChart() {
+interface Props {
+  envFilter: EnvironmentFilter;
+}
+
+export function RolloutErrorChart({ envFilter }: Props) {
   const { data, loading, error } = useArtifact<RolloutErrors>(
     "/artifacts/rollout-errors"
   );
@@ -34,10 +38,24 @@ export function RolloutErrorChart() {
   if (error) return <p className="text-red-400 text-sm">Error: {error}</p>;
   if (!data) return null;
 
-  const maxHorizon = Math.max(...Object.values(data).map((a) => a.length));
+  const filteredEntries = Object.entries(data).filter(([algo]) => {
+    return envFilter === "all" || inferEnvironment(algo) === envFilter;
+  });
+
+  if (filteredEntries.length === 0) {
+    return (
+      <div className="h-96 flex items-center justify-center text-zinc-500 dark:text-zinc-500">
+        No rollout error data for the selected environment yet.
+      </div>
+    );
+  }
+
+  const filteredData = Object.fromEntries(filteredEntries);
+
+  const maxHorizon = Math.max(...Object.values(filteredData).map((a) => a.length));
   const chartData = Array.from({ length: maxHorizon }, (_, i) => {
     const point: Record<string, number> = { horizon: i + 1 };
-    Object.entries(data).forEach(([algo, errors]) => {
+    Object.entries(filteredData).forEach(([algo, errors]) => {
       if (errors[i] !== undefined) point[algo] = errors[i];
     });
     return point;
@@ -82,7 +100,7 @@ export function RolloutErrorChart() {
             wrapperClassName="dark:[&>div]:!bg-zinc-900/98 dark:[&>div]:!border-white/10 dark:[&>div]:!text-zinc-100"
           />
           <Legend wrapperStyle={{ fontSize: "12px", fontWeight: 500 }} />
-          {Object.keys(data).map((algo) => (
+          {Object.keys(filteredData).map((algo) => (
             <Line
               key={algo}
               type="monotone"

@@ -57,6 +57,10 @@ def _env_title(env_name: str, task: str) -> str:
     return f"{env_name.title()} {task.title()}"
 
 
+def _env_theme(env_name: str) -> str:
+    return "speed" if env_name == "cheetah" else "balance"
+
+
 def _behavior_text(env_name: str, task: str) -> str:
     verb_map = {
         "walk": "walking",
@@ -148,6 +152,7 @@ def load_model(label: str, device: str = "cpu"):
         "algo_type": algo,
         "env_name": cfg["env_name"],
         "task": cfg["task"],
+        "env_theme": _env_theme(cfg["env_name"]),
         "label": artifact_dir,
         "run_name": artifact_dir,
         "display_name": artifact_dir,

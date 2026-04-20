@@ -10,6 +10,7 @@ import { ComparisonTable } from "./components/comparison-table";
 import { ThemeProvider } from "./components/theme-provider";
 import { ThemeToggle } from "./components/theme-toggle";
 import { Sparkles } from "lucide-react";
+import { EnvironmentFilter } from "./lib/constants";
 
 export default function App() {
   return (
@@ -28,6 +29,9 @@ function AppContent() {
       run_name: string;
       display_name: string;
       algorithm_name: string;
+      env_name: string;
+      task: string;
+      env_theme: string;
       env_title: string;
       behavior_text: string;
     }>;
@@ -35,9 +39,17 @@ function AppContent() {
     stream_error?: string | null;
   }>("/health");
   const [activeTab, setActiveTab] = useState("live");
+  const [envFilter, setEnvFilter] = useState<EnvironmentFilter>("all");
   const liveModels = health?.models ?? [];
   const hasLiveModels = liveModels.length > 0;
   const liveCards = message?.models ?? liveModels;
+  const filteredLiveEntries = liveCards
+    .map((model, index) => ({
+      model,
+      frame: message?.frames[index] ?? "",
+      metric: message?.metrics.find((item) => item.label === model.label),
+    }))
+    .filter(({ model }) => envFilter === "all" || model.env_name === envFilter);
   const liveError = health?.stream_error ?? health?.startup_error ?? null;
 
   return (
@@ -109,6 +121,26 @@ function AppContent() {
         </div>
 
         <main className="px-6 py-6">
+          <div className="mb-6 flex flex-wrap items-center gap-3 rounded-2xl border border-zinc-200 bg-white/70 p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-900/40">
+            <span className="text-xs font-semibold uppercase tracking-[0.24em] text-zinc-500 dark:text-zinc-400">
+              Environment Dial
+            </span>
+            {(["all", "walker", "cheetah"] as EnvironmentFilter[]).map((env) => (
+              <button
+                key={env}
+                type="button"
+                onClick={() => setEnvFilter(env)}
+                className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+                  envFilter === env
+                    ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-950"
+                    : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                }`}
+              >
+                {env === "all" ? "All Runs" : env[0].toUpperCase() + env.slice(1)}
+              </button>
+            ))}
+          </div>
+
           <TabsContent value="live" className="space-y-6">
             <div className="flex items-center gap-3 text-sm">
               <div className={`relative w-3 h-3 rounded-full ${connected ? "bg-emerald-500" : "bg-red-500"}`}>
@@ -123,24 +155,27 @@ function AppContent() {
 
             {message ? (
               <>
-                <div
-                  className="grid gap-4"
-                  style={{
-                    gridTemplateColumns: `repeat(${Math.min(
-                      liveCards.length,
-                      3
-                    )}, 1fr)`,
-                  }}
-                >
-                  {liveCards.map((model, i) => (
-                    <VideoPanel
-                      key={model.label}
-                      model={model}
-                      frame={message.frames[i] ?? ""}
-                      metric={message.metrics[i]}
-                    />
-                  ))}
-                </div>
+                {filteredLiveEntries.length > 0 ? (
+                  <div
+                    className="grid gap-4"
+                    style={{
+                      gridTemplateColumns: `repeat(${Math.min(filteredLiveEntries.length, 3)}, 1fr)`,
+                    }}
+                  >
+                    {filteredLiveEntries.map(({ model, frame, metric }) => (
+                      <VideoPanel
+                        key={model.label}
+                        model={model}
+                        frame={frame}
+                        metric={metric}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/50 dark:text-zinc-400">
+                    No live runs match the current environment dial.
+                  </div>
+                )}
 
                 <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white/70 dark:bg-zinc-900/50 backdrop-blur-sm p-6 shadow-xl dark:shadow-none">
                   <h2 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-5">
@@ -149,6 +184,7 @@ function AppContent() {
                   <LiveRewardChart
                     labels={message.labels}
                     latestMetrics={message.metrics}
+                    envFilter={envFilter}
                   />
                 </div>
               </>
@@ -185,7 +221,7 @@ function AppContent() {
               </p>
             </div>
             <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white/70 dark:bg-zinc-900/50 backdrop-blur-sm p-6 shadow-xl dark:shadow-none">
-              <TrainingCurves />
+              <TrainingCurves envFilter={envFilter} />
             </div>
           </TabsContent>
 
@@ -204,7 +240,7 @@ function AppContent() {
                 </p>
               </div>
               <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white/70 dark:bg-zinc-900/50 backdrop-blur-sm p-6 shadow-xl dark:shadow-none">
-                <RolloutErrorChart />
+                <RolloutErrorChart envFilter={envFilter} />
               </div>
             </div>
 
@@ -234,7 +270,7 @@ function AppContent() {
                 .
               </p>
             </div>
-            <ComparisonTable />
+            <ComparisonTable envFilter={envFilter} />
           </TabsContent>
         </main>
       </Tabs>

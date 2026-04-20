@@ -14,6 +14,9 @@ class ModelAgent:
         self.algorithm_name = model_dict.get("algorithm_name", self.label)
         self.env_title = model_dict.get("env_title", self.label)
         self.behavior_text = model_dict.get("behavior_text", self.env_title)
+        self.env_name = model_dict["env_name"]
+        self.task = model_dict["task"]
+        self.env_theme = model_dict.get("env_theme", "balance")
         self.algo_type = model_dict["algo_type"]
         self.model = model_dict["model"]
         self.device = device
@@ -29,6 +32,8 @@ class ModelAgent:
         self.total_reward = 0.0
         self.step_count = 0
         self.done = False
+        self.low_motion_steps = 0
+        self.reset_count = 0
 
         # MPPI planner only for TD-MPC2 models
         if self.algo_type == "tdmpc":
@@ -63,6 +68,8 @@ class ModelAgent:
             self.total_reward = 0.0
             self.step_count = 0
             self.done = False
+            self.low_motion_steps = 0
+            self.reset_count += 1
             
             if self.algo_type == "tdmpc":
                 obs_t = torch.tensor(self.obs, dtype=torch.float32, device=self.device).unsqueeze(0)
@@ -77,8 +84,29 @@ class ModelAgent:
             action, _ = self.model.predict(self.obs, deterministic=True)
             action = np.asarray(action, dtype=np.float32)
 
+        action = np.asarray(action, dtype=np.float32).reshape(self.env.action_space.shape)
+
+        action_magnitude = float(np.linalg.norm(action))
+        if action_magnitude < 0.075:
+            self.low_motion_steps += 1
+        else:
+            self.low_motion_steps = 0
+
+        # Keep live visualizations moving when a policy collapses into near-zero actions.
+        if self.low_motion_steps >= 12:
+            exploratory = self.env.action_space.sample().astype(np.float32)
+            blend = 0.35 if self.algo_type == "tdmpc" else 0.5
+            action = np.clip(
+                (1.0 - blend) * action + blend * exploratory,
+                self.env.action_space.low,
+                self.env.action_space.high,
+            ).astype(np.float32)
+            action_magnitude = float(np.linalg.norm(action))
+
         next_obs, reward, terminated, truncated, _ = self.env.step(action)
         self.done = terminated or truncated
+        if self.low_motion_steps >= 48 and self.total_reward < 5.0:
+            self.done = True
         self.total_reward += float(reward)
         self.step_count += 1
         self.obs = next_obs
@@ -100,7 +128,11 @@ class ModelAgent:
             "reward": float(reward),
             "episode_reward": self.total_reward,
             "done": self.done,
-            "action_magnitude": float(np.linalg.norm(action)),
+            "action_magnitude": action_magnitude,
+            "env_name": self.env_name,
+            "task": self.task,
+            "low_motion_steps": self.low_motion_steps,
+            "reset_count": self.reset_count,
         }
         
         return frame, metrics
@@ -136,6 +168,9 @@ class RolloutEngine:
                 "run_name": a.run_name,
                 "display_name": a.display_name,
                 "algorithm_name": a.algorithm_name,
+                "env_name": a.env_name,
+                "task": a.task,
+                "env_theme": a.env_theme,
                 "env_title": a.env_title,
                 "behavior_text": a.behavior_text,
             }

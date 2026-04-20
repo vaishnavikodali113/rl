@@ -10,6 +10,10 @@ interface Props {
 
 export function VideoPanel({ model, frame, metric }: Props) {
   const color = ALGO_COLORS[model.label] ?? DEFAULT_COLOR;
+  const envBadgeClass =
+    model.env_name === "cheetah"
+      ? "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300"
+      : "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300";
 
   return (
     <div className="flex flex-col rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 shadow-lg hover:shadow-2xl transition-all duration-300 hover:scale-[1.02] group">
@@ -25,8 +29,11 @@ export function VideoPanel({ model, frame, metric }: Props) {
           <div className="text-sm font-bold text-zinc-900 dark:text-zinc-100 truncate">
             {model.run_name}
           </div>
-          <div className="text-[11px] uppercase tracking-[0.18em] text-zinc-500 dark:text-zinc-400 truncate">
-            {model.env_title} · {model.algorithm_name}
+          <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-zinc-500 dark:text-zinc-400 truncate">
+            <span>{model.algorithm_name}</span>
+            <span className={`rounded-full border px-2 py-0.5 tracking-[0.14em] ${envBadgeClass}`}>
+              {model.env_name}
+            </span>
           </div>
         </div>
         {metric && (
@@ -61,6 +68,11 @@ export function VideoPanel({ model, frame, metric }: Props) {
                   <Zap className="w-3.5 h-3.5" />
                   <span className="font-mono">{metric.action_magnitude.toFixed(3)}</span>
                 </div>
+                {(metric.low_motion_steps ?? 0) >= 8 && (
+                  <span className="rounded-full bg-white/15 px-2 py-0.5">
+                    rescue {metric.low_motion_steps}
+                  </span>
+                )}
                 <span>Step {metric.step}</span>
               </div>
             </div>

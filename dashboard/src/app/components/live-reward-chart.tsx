@@ -10,11 +10,12 @@ import {
   CartesianGrid,
 } from "recharts";
 import { StepMetric } from "../hooks/use-websocket";
-import { ALGO_COLORS, DEFAULT_COLOR } from "../lib/constants";
+import { ALGO_COLORS, DEFAULT_COLOR, EnvironmentFilter } from "../lib/constants";
 
 interface Props {
   labels: string[];
   latestMetrics: StepMetric[];
+  envFilter: EnvironmentFilter;
 }
 
 const HISTORY_LIMIT = 300;
@@ -22,7 +23,7 @@ const historyRef: { current: Record<string, { step: number; reward: number }[]> 
   current: {},
 };
 
-export function LiveRewardChart({ labels, latestMetrics }: Props) {
+export function LiveRewardChart({ labels, latestMetrics, envFilter }: Props) {
   latestMetrics.forEach((m) => {
     if (!historyRef.current[m.label]) historyRef.current[m.label] = [];
     const arr = historyRef.current[m.label];
@@ -30,12 +31,19 @@ export function LiveRewardChart({ labels, latestMetrics }: Props) {
     if (arr.length > HISTORY_LIMIT) arr.shift();
   });
 
+  const filteredLabels = labels.filter((label) => {
+    if (envFilter === "all") return true;
+    const metric = latestMetrics.find((item) => item.label === label);
+    return metric?.env_name === envFilter;
+  });
+
   const maxLen = Math.max(
-    ...labels.map((l) => historyRef.current[l]?.length ?? 0)
+    0,
+    ...filteredLabels.map((l) => historyRef.current[l]?.length ?? 0)
   );
   const chartData = Array.from({ length: maxLen }, (_, i) => {
     const point: Record<string, number> = {};
-    labels.forEach((l) => {
+    filteredLabels.forEach((l) => {
       const arr = historyRef.current[l];
       if (arr && arr[i] !== undefined) {
         point["step"] = arr[i].step;
@@ -83,7 +91,7 @@ export function LiveRewardChart({ labels, latestMetrics }: Props) {
             wrapperClassName="dark:[&>div]:!bg-zinc-900/98 dark:[&>div]:!border-white/10 dark:[&>div]:!text-zinc-100"
           />
           <Legend wrapperStyle={{ fontSize: "12px", fontWeight: 500 }} />
-          {labels.map((l) => (
+          {filteredLabels.map((l) => (
             <Line
               key={l}
               type="monotone"

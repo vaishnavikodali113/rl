@@ -2,20 +2,35 @@ import json
 from stable_baselines3 import SAC
 from stable_baselines3.common.callbacks import EvalCallback
 from stable_baselines3.common.callbacks import CallbackList
+
 from artifact_logging import JsonLinesMetricCallback, utc_now_iso
 from device_utils import describe_device, get_best_device
 from env_setup import make_env
 from run_layout import init_run_paths
 
 
-def main():
-    run_name = "sac_cheetah"
+TASK_DEFAULTS = {
+    "cheetah": ("run", "sac_cheetah", 100_000),
+    "walker": ("walk", "sac_walker", 100_000),
+}
+
+
+def main(
+    env_name: str = "cheetah",
+    task: str | None = None,
+    run_name: str | None = None,
+    total_timesteps: int | None = None,
+):
+    default_task, default_run_name, default_steps = TASK_DEFAULTS[env_name]
+    task = task or default_task
+    run_name = run_name or default_run_name
+    total_timesteps = total_timesteps or default_steps
     device = get_best_device()
     device_description = describe_device()
     paths = init_run_paths(run_name)
 
-    env = make_env("cheetah", "run")
-    eval_env = make_env("cheetah", "run")
+    env = make_env(env_name, task)
+    eval_env = make_env(env_name, task)
 
     model = SAC(
         "MlpPolicy",
@@ -44,14 +59,13 @@ def main():
     ])
 
     started_at = utc_now_iso()
-    total_timesteps = 100_000
     model.learn(total_timesteps=total_timesteps, callback=callbacks)
     model.save(str(paths.model_path))
 
     summary = {
         "run_name": run_name,
         "algorithm": "SAC",
-        "environment": "cheetah_run",
+        "environment": f"{env_name}_{task}",
         "device": device,
         "device_description": device_description,
         "total_timesteps": total_timesteps,
