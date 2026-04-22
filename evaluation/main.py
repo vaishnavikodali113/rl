@@ -14,7 +14,7 @@ from evaluation.compare_plots import (
     plot_reward_curves,
     plot_sample_efficiency,
 )
-from tdmpc2.model import TDMPC2Model
+from tdmpc2.compat import load_tdmpc2_agent
 
 
 def _device_for_eval() -> str:
@@ -37,7 +37,7 @@ def _checkpoint_path(summary: dict) -> str | None:
     return None
 
 
-def _build_model_from_checkpoint(run_record: dict, device: str) -> TDMPC2Model | None:
+def _build_model_from_checkpoint(run_record: dict, device: str):
     summary = run_record["summary"]
     algorithm = str(summary.get("algorithm", "")).lower()
     if "td-mpc2" not in algorithm:
@@ -47,40 +47,14 @@ def _build_model_from_checkpoint(run_record: dict, device: str) -> TDMPC2Model |
     if checkpoint_path is None:
         return None
 
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
-    model_state = checkpoint["model_state_dict"]
-    config = checkpoint.get("config", {})
-
-    latent_dim = int(config.get("latent_dim", model_state["reward.net.0.weight"].shape[1] - 6))
-    obs_dim = int(model_state["encoder.net.0.weight"].shape[1])
-    action_dim = int(model_state["reward.net.0.weight"].shape[1] - latent_dim)
-    dynamics_type = summary["run_name"].split("_")[-1]
-    if dynamics_type == "h10":
-        dynamics_type = "s5"
-
-    model = TDMPC2Model(
-        obs_dim=obs_dim,
-        action_dim=action_dim,
-        latent_dim=latent_dim,
-        dynamics_type=dynamics_type,
-        ssm_state_dim=int(config.get("ssm_state_dim", 256)),
-        simnorm_dim=int(config.get("simnorm_dim", 8)) if config.get("simnorm_dim", 8) > 0 else None,
-    )
-    missing, unexpected = model.load_state_dict(model_state, strict=False)
-    if missing or unexpected:
-        print(
-            f"Checkpoint compatibility note for {summary['run_name']}: "
-            f"missing={list(missing)} unexpected={list(unexpected)}"
-        )
-    model.planner_config = {
-        "plan_horizon": config.get("plan_horizon", 5),
-        "plan_samples": config.get("plan_samples", 512),
-        "plan_temperature": config.get("plan_temperature", 0.5),
-        "gamma": config.get("gamma", 0.99),
-    }
-    model.to(device)
-    model.eval()
-    return model
+    summary_path = Path(str(summary.get("artifacts", {}).get("summary_json", "")))
+    if not summary_path.is_file():
+        summary_path = Path("artifacts") / summary["run_name"] / "summary.json"
+    try:
+        return load_tdmpc2_agent(checkpoint_path, summary_path=summary_path, device=device)
+    except Exception as exc:
+        print(f"Failed to reconstruct TD-MPC2 agent for {summary['run_name']}: {exc}")
+        return None
 
 
 def _format_metric(value: float | None, digits: int = 3) -> str:

@@ -1,366 +1,200 @@
-# Efficient Model-Based Reinforcement Learning with Structured State-Space World Models
+# Reinforcement Learning Project
 
-> B.Tech AIML Reinforcement Learning Course Project
-> Cross-platform target: macOS Apple Silicon or Linux Fedora with NVIDIA GPU
-> Tested with Python 3.13 and the current dependency set in `requirements.txt`
+This repository now uses the upstream [`nicklashansen/tdmpc2`](https://github.com/nicklashansen/tdmpc2) codebase as a Git submodule at [`tdmpc_2/`](./tdmpc_2), while keeping the rest of the project stable through a local compatibility layer in [`tdmpc2/`](./tdmpc2).
 
-## Project Overview
+## Current Architecture
 
-This repo trains reinforcement learning baselines on DeepMind Control Suite tasks using a custom `dm_control` to Gymnasium wrapper. The setup now supports both:
+- `tdmpc_2/`
+  The upstream TD-MPC2 repository, kept as a submodule and treated as read-only.
+- `tdmpc2/`
+  Local compatibility wrappers that:
+  - preserve the existing CLI entrypoints
+  - train through the submodule without editing it
+  - materialize artifacts in the repo’s historical `logs/<run>` and `artifacts/<run>` layout
+  - reconstruct TD-MPC2 agents for the server and evaluation stack
+- `server/`, `evaluation/`, `app.py`
+  Existing project infrastructure that now consumes compatibility artifacts instead of the old custom TD-MPC2 checkpoint schema.
 
-- macOS with Apple Silicon using `mps`
-- Linux with NVIDIA GPUs using `cuda`
+## Important Migration Note
 
-If no accelerator is available, the scripts fall back to CPU automatically.
+This repo previously had a custom in-tree TD-MPC2 implementation with extra structured-dynamics variants (`s4`, `s5`, `mamba`).
 
-## Project Structure
+That is no longer the active backend.
+
+The active backend is the upstream `tdmpc_2` submodule used as-is.
+
+Because the upstream codebase does not expose the old structured-dynamics hooks, the legacy commands and run names are preserved only for compatibility. They still invoke the canonical upstream TD-MPC2 implementation.
+
+## Repository Layout
 
 ```text
 rl/
-├── dashboard/              # Next.js visual dashboard
-├── server/                 # FastAPI + WebSocket visualization backend
-├── main.py                 # Unified CLI entry point
-├── run_layout.py           # Shared run directory initialization
-├── artifact_logging.py     # JSONL artifact callback
-├── device_utils.py         # Cross-platform device detection: CUDA, MPS, CPU
-├── env_setup.py            # dm_control -> Gymnasium wrapper
-├── train_ppo_mac.py        # PPO training task
-├── train_sac_mac.py        # SAC training task
-├── tdmpc2/
-│   ├── model.py            # Phase 1 TD-MPC2 world model components
-│   ├── replay_buffer.py    # Sequence replay buffer
-│   ├── trainer.py          # TD-MPC2 training loop and MPPI planner
-│   └── train_tdmpc2.py     # TD-MPC2 training entry point
-├── test_env.py             # Lightweight environment smoke test
-├── plot_results.py         # Plot saved evaluation curves
-├── requirements.txt        # Python dependencies
-├── logs/                   # Model checkpoints and evaluation outputs
-│   ├── ppo_walker/
-│   └── sac_cheetah/
-├── artifacts/              # Structured run artifacts
-│   ├── ppo_walker/
-│   └── sac_cheetah/
-└── README.md
+├── app.py                      # Unified backend/dashboard launcher
+├── main.py                     # Unified CLI for training, plotting, evaluation
+├── env_setup.py                # dm_control -> Gymnasium adapter for SB3/server flows
+├── tdmpc2/                     # Local compatibility layer around tdmpc_2
+│   ├── compat.py               # Core adapter: training, artifact sync, agent loading
+│   ├── train_tdmpc2.py         # Historical entrypoint, now routed to compat.py
+│   └── __init__.py
+├── tdmpc_2/                    # Git submodule: upstream TD-MPC2 repo
+├── server/                     # FastAPI/WebSocket visualization backend
+├── evaluation/                 # Offline comparison, plotting, benchmarking
+├── dashboard/                  # Frontend dashboard
+├── knowledge_base.md           # Human-facing technical map of the repo
+└── SYSTEM_INSTRUCTIONS.md      # Starter instructions for future agents
 ```
 
-## What Changed For Cross-Platform Support
+## Clone And Setup
 
-- Training now auto-selects `cuda`, then `mps`, then `cpu`
-- The code no longer depends on `dmc2gym`
-- Each run now initializes its own labeled directories under `logs/` and `artifacts/`
-- Plotting works with both new cross-platform logs and older `_mac` logs
-- The environment smoke test avoids viewer/render assumptions that often break on Linux
-
-## Fedora + NVIDIA Setup
-
-These steps fit your ASUS ProArt PX13 with Ryzen 9 and RTX 4050 laptop.
-
-### 1. Install system packages
+Clone with submodules:
 
 ```bash
-sudo dnf update -y
-sudo dnf install -y python3 python3-virtualenv git gcc gcc-c++ make \
-    glfw glfw-devel mesa-libGL mesa-libGL-devel libXcursor libXi libXinerama libXrandr
+git clone --recurse-submodules <repo-url>
+cd rl
 ```
 
-If your NVIDIA drivers are already installed and `nvidia-smi` works, keep using them. If not, install the correct Fedora NVIDIA driver stack first.
-
-### 2. Create and activate a virtual environment
+If you already cloned without submodules:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip setuptools wheel
+git submodule update --init --recursive
 ```
 
-### 3. Install PyTorch with CUDA support
+Install Python dependencies in your active environment:
 
 ```bash
-pip install --index-url https://download.pytorch.org/whl/cu124 \
-    torch torchvision torchaudio
-```
-
-### 4. Install the remaining Python dependencies
-
-```bash
-pip install --no-deps dm_control
 pip install -r requirements.txt
 ```
 
-If you previously hit a `labmaze` build error, rerun with:
+## Runtime Requirements
 
-```bash
-pip uninstall -y labmaze dm_control shimmy
-pip install --no-deps dm_control
-pip install -r requirements.txt
-```
+### PPO / SAC
 
-### 5. Verify CUDA and MuJoCo
+- Can still run on CPU, MPS, or CUDA depending on your environment.
 
-```bash
-python - <<'PY'
-import torch
-import mujoco
-from device_utils import describe_device
-from env_setup import make_env
+### TD-MPC2 via `tdmpc_2`
 
-print("Torch:", torch.__version__)
-print("CUDA available:", torch.cuda.is_available())
-print("Selected device:", describe_device())
-print("MuJoCo:", mujoco.__version__)
+- Requires CUDA.
+- The upstream submodule hardcodes CUDA in several internal modules.
+- The local compatibility layer intentionally does not edit the submodule to remove those assumptions.
 
-env = make_env("walker", "walk")
-obs = env.reset()
-print("Env OK, obs shape:", obs[0].shape)
-PY
-```
+If CUDA is unavailable, TD-MPC2 training/loading will fail fast with a clear error, while the rest of the repo can still run.
 
-Expected on your laptop:
+## Main Commands
 
-- `CUDA available: True`
-- selected device should show `cuda`
-
-## macOS Apple Silicon Setup
-
-### 1. Install system packages
-
-```bash
-brew install python glfw git
-```
-
-### 2. Create and activate a virtual environment
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip setuptools wheel
-```
-
-### 3. Install Python packages
-
-```bash
-pip install --no-deps dm_control
-pip install torch torchvision torchaudio
-pip install -r requirements.txt
-```
-
-### 4. Verify MPS and MuJoCo
-
-```bash
-python - <<'PY'
-import torch
-import mujoco
-from device_utils import describe_device
-from env_setup import make_env
-
-print("Torch:", torch.__version__)
-print("MPS available:", hasattr(torch.backends, "mps") and torch.backends.mps.is_available())
-print("Selected device:", describe_device())
-print("MuJoCo:", mujoco.__version__)
-
-env = make_env("walker", "walk")
-obs = env.reset()
-print("Env OK, obs shape:", obs[0].shape)
-PY
-```
-
-## Run The Project
-
-From the repo root after activating the virtual environment:
-
-### Run the visualization stack
-
-The new root launcher can run the backend directly and, when needed, bring up
-the dashboard dev server with the backend URLs wired automatically.
-
-Serve the FastAPI backend only:
-
-```bash
-python app.py serve --frontend static
-```
-
-Serve backend + Vite dashboard together for development:
-
-```bash
-python app.py serve --frontend dev --reload
-```
-
-Check which artifacts and frontend assets are available:
-
-```bash
-python app.py status
-```
-
-You can still start the backend with plain `uvicorn` if you prefer:
-
-```bash
-python -m uvicorn server.server:app --host 0.0.0.0 --port 8001
-```
-
-Or run the frontend separately in a second terminal:
-
-```bash
-cd dashboard
-npm install
-npm run dev
-```
-
-The Vite dev server now proxies `/ws`, `/metrics`, `/artifacts`, and `/health`
-to the backend on port `8000`, so the dashboard and API stay connected without
-hardcoded URLs. In production, build the dashboard with `npm run build`; the
-FastAPI server will serve `dashboard/dist` directly on `http://localhost:8000`.
-
-### Smoke test the environment
+Environment smoke test:
 
 ```bash
 python main.py test
 ```
 
-### Train PPO on Walker-Walk
+Train PPO:
 
 ```bash
 python main.py ppo
 ```
 
-The script stays quiet during training and writes artifacts to:
-
-- `artifacts/ppo_walker/metrics.jsonl`
-- `artifacts/ppo_walker/summary.json`
-
-Default training length: `50,000` timesteps.
-
-### Train SAC on Cheetah-Run
+Train SAC:
 
 ```bash
 python main.py sac
 ```
 
-The script stays quiet during training and writes artifacts to:
-
-- `artifacts/sac_cheetah/metrics.jsonl`
-- `artifacts/sac_cheetah/summary.json`
-
-Default training length: `100,000` timesteps.
-
-### Plot results
-
-```bash
-python main.py plot
-```
-
-### Train TD-MPC2 with MLP dynamics on Walker-Walk
+Train TD-MPC2 through the submodule:
 
 ```bash
 python main.py tdmpc
 ```
 
-`main.py tdmpc` now runs a **Stage 1 quick baseline** with `10,000` environment steps by default (instead of a long multi-hour run).  
-This is intended to finish much faster while keeping the same training pipeline and artifacts.
-
-Expected terminal output at startup:
-
-```text
-Selected device: cuda ...   # or mps/cpu depending on hardware
-Training output stored in artifacts/tdmpc2_walker_mlp/metrics.jsonl and artifacts/tdmpc2_walker_mlp/summary.json
-```
-
-During the run, metrics are logged every `1,000` steps, giving 10 log checkpoints up to 10,000.
-
-To train the same Phase 1 baseline on other domains directly:
+Legacy compatibility entrypoints still exist:
 
 ```bash
-python -m tdmpc2.train_tdmpc2 --env-name cheetah
-python -m tdmpc2.train_tdmpc2 --env-name hopper
+python main.py tdmpc-s4
+python main.py tdmpc-s5
+python main.py tdmpc-mamba
 ```
 
-You can still override the default length, for example:
+Those commands keep the old run naming convention, but the backend remains canonical upstream TD-MPC2.
+
+Plot saved results:
 
 ```bash
-python -m tdmpc2.train_tdmpc2 --env-name walker --total-steps 50000
+python main.py plot
+python main.py all-phases
 ```
 
-The training scripts print the selected runtime device automatically.
-
-### Phase 3 runs (H=5 vs H=10 + stability tools)
-
-You can now launch the default Phase 3 S5 + stability configuration via `main.py`:
+Run the visualization backend:
 
 ```bash
-python main.py phase3 --total-steps 200000 --max-wall-clock-seconds 2700
+python app.py serve --frontend static
 ```
 
-Use the new wall-clock cap to prevent runaway jobs. Example: stop each run after 45 minutes:
+Run backend + Vite dashboard in development:
 
 ```bash
-python -m tdmpc2.train_tdmpc2 --dynamics-type mlp --plan-horizon 10 \
-  --run-name tdmpc2_walker_mlp_h10 --total-steps 200000 --max-wall-clock-seconds 2700
-
-python -m tdmpc2.train_tdmpc2 --dynamics-type s5 --plan-horizon 10 \
-  --use-sam --simnorm-dim 8 --use-info-prop \
-  --run-name tdmpc2_walker_s5_h10 --total-steps 200000 --max-wall-clock-seconds 2700
+python app.py serve --frontend dev --reload
 ```
 
-You can generate the dedicated Phase 3 ablation figure with:
+## TD-MPC2 Compatibility Contract
 
-```bash
-python plot_results.py --phase3
-```
+Training through `tdmpc2.compat.train_with_vendor_backend(...)` does four things:
 
-Or generate all phase-specific plots and per-run case plots in one go:
+1. Builds an upstream-style config from the old repo CLI parameters.
+2. Runs the upstream TD-MPC2 trainer from the submodule without modifying the submodule.
+3. Copies/synchronizes the resulting outputs into the historical project layout.
+4. Writes compatibility metadata so the rest of the codebase can keep working.
 
-```bash
-python plot_results.py --all-phases
-```
+For a run named `tdmpc2_walker_mlp`, the important outputs are:
 
-This writes outputs under:
+- `artifacts/tdmpc2_walker_mlp/summary.json`
+- `artifacts/tdmpc2_walker_mlp/metrics.jsonl`
+- `artifacts/tdmpc2_walker_mlp/model.pt`
+- `logs/tdmpc2_walker_mlp/eval/evaluations.npz`
 
-- `artifacts/plots/overview/`
-- `artifacts/plots/phase0/`
-- `artifacts/plots/phase1/`
-- `artifacts/plots/phase2/`
-- `artifacts/plots/phase3/`
-- `artifacts/plots/all_cases/`
+The original upstream training logs are still kept under the submodule-style work dir:
 
-Expected results for the Phase 3 comparison:
+- `logs/<task>/<seed>/<exp_name>/...`
 
-- `tdmpc2_walker_mlp_h10` should underperform `tdmpc2_walker_mlp_h5` (planning degrades at longer horizon).
-- `tdmpc2_walker_s5_h10` should be close to or better than `tdmpc2_walker_s5_h5` (long-horizon stability with SSM dynamics).
-- Enabling `--use-sam` should reduce rollout error metrics compared with Adam-only runs.
-- Enabling `--use-info-prop` should reduce evaluation reward variance when planning enters uncertain regions.
+The compatibility summary points back to that original directory through `artifacts.<vendor_log_dir>`.
 
-## Output Layout
+## Server And Evaluation Behavior
 
-Each algorithm now gets its own labeled directory tree:
+The server and evaluation stack no longer deserialize the old custom `TDMPC2Model` checkpoint format.
 
-```text
-logs/
-├── ppo_walker/
-│   ├── best/
-│   ├── eval/
-│   └── final_model.zip
-└── sac_cheetah/
-    ├── best/
-    ├── eval/
-    └── final_model.zip
+Instead they:
 
-artifacts/
-├── ppo_walker/
-│   ├── metrics.jsonl
-│   └── summary.json
-└── sac_cheetah/
-    ├── metrics.jsonl
-    └── summary.json
-```
+- read `summary.json`
+- locate `model.pt`
+- reconstruct an upstream TD-MPC2 agent through `tdmpc2.compat.load_tdmpc2_agent(...)`
 
-## Notes For Linux Rendering
+For live rollouts:
 
-For normal training, no special rendering setup is required.
+- PPO/SAC still use `model.predict(...)`
+- TD-MPC2 now uses the upstream agent’s `act(...)` API directly
 
-If you later add visual rendering on Linux and hit OpenGL issues, these environment variables are the usual fixes:
+## Files To Read First
 
-```bash
-export MUJOCO_GL=egl
-export PYOPENGL_PLATFORM=egl
-```
+If you are orienting in this repo, start here:
 
-Use those only when needed for headless or EGL-backed rendering.
+1. [`SYSTEM_INSTRUCTIONS.md`](./SYSTEM_INSTRUCTIONS.md)
+2. [`knowledge_base.md`](./knowledge_base.md)
+3. [`tdmpc2/compat.py`](./tdmpc2/compat.py)
+4. [`main.py`](./main.py)
+5. [`server/model_loader.py`](./server/model_loader.py)
+6. [`server/rollout_engine.py`](./server/rollout_engine.py)
+
+## Known Limitations
+
+- TD-MPC2 is currently CUDA-only in this integration because the submodule is used without patching its internals.
+- Legacy `s4`, `s5`, and `mamba` command names are compatibility aliases, not distinct upstream model architectures.
+- The archived in-tree `tdmpc2/model.py` and `tdmpc2/trainer.py` files are no longer the active training path.
+
+## Development Rule
+
+Do not edit files inside `tdmpc_2/` unless you intentionally want to fork the upstream submodule.
+
+All project-specific adaptation should happen in the main repo, primarily through:
+
+- `tdmpc2/compat.py`
+- `server/`
+- `evaluation/`
+- docs and metadata files

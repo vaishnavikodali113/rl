@@ -34,9 +34,10 @@ class ModelAgent:
         self.done = False
         self.low_motion_steps = 0
         self.reset_count = 0
+        self.uses_tdmpc_agent_api = self.algo_type == "tdmpc" and hasattr(self.model, "act")
 
-        # MPPI planner only for TD-MPC2 models
-        if self.algo_type == "tdmpc":
+        # MPPI planner only for legacy TD-MPC2 world-model objects.
+        if self.algo_type == "tdmpc" and not self.uses_tdmpc_agent_api:
             act_dim = self.env.action_space.shape[0]
             self.planner = MPPI(
                 self.model,
@@ -71,12 +72,20 @@ class ModelAgent:
             self.low_motion_steps = 0
             self.reset_count += 1
             
-            if self.algo_type == "tdmpc":
+            if self.algo_type == "tdmpc" and not self.uses_tdmpc_agent_api:
                 obs_t = torch.tensor(self.obs, dtype=torch.float32, device=self.device).unsqueeze(0)
                 self.z = self.model.encoder(obs_t)
 
         # Select action
-        if self.algo_type == "tdmpc":
+        if self.uses_tdmpc_agent_api:
+            obs_tensor = torch.as_tensor(self.obs, dtype=torch.float32)
+            with torch.no_grad():
+                action = self.model.act(
+                    obs_tensor,
+                    t0=self.step_count == 0,
+                    eval_mode=True,
+                ).cpu().numpy()
+        elif self.algo_type == "tdmpc":
             with torch.no_grad():
                 action = self.planner.plan(self.z, self.device).squeeze(0).cpu().numpy()
         else:
@@ -111,8 +120,8 @@ class ModelAgent:
         self.step_count += 1
         self.obs = next_obs
 
-        # Update latent for TD-MPC2
-        if self.algo_type == "tdmpc":
+        # Update latent for legacy TD-MPC2 world-model objects.
+        if self.algo_type == "tdmpc" and not self.uses_tdmpc_agent_api:
             obs_t = torch.tensor(next_obs, dtype=torch.float32, device=self.device).unsqueeze(0)
             with torch.no_grad():
                 self.z = self.model.encoder(obs_t)

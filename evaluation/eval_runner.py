@@ -29,37 +29,52 @@ def evaluate_policy(model, env, n_episodes=20, device='cpu', planner_config: dic
     Returns: mean_reward, std_reward
     """
     device = torch.device(device)
-    planner = _planner_from_config(model, env.action_space.shape[0], planner_config=planner_config)
+    planner = None if hasattr(model, "act") else _planner_from_config(
+        model,
+        env.action_space.shape[0],
+        planner_config=planner_config,
+    )
     episode_rewards = []
     for _ in range(n_episodes):
         obs = env.reset()
         obs_value = obs[0] if isinstance(obs, tuple) else obs
         total_reward = 0.0
         done = False
-        _reset_model_hidden(model, batch_size=1, device=device)
+        episode_step = 0
+        if not hasattr(model, "act"):
+            _reset_model_hidden(model, batch_size=1, device=device)
         while not done:
-            obs_tensor = torch.as_tensor(obs_value, dtype=torch.float32, device=device).unsqueeze(0)
             with torch.no_grad():
-                z = model.encoder(obs_tensor)
-                env_hidden = (
-                    model.dynamics.snapshot_hidden()
-                    if hasattr(model.dynamics, "snapshot_hidden")
-                    else None
-                )
-                action_tensor = planner.plan(z, device)
-                if hasattr(model.dynamics, "restore_hidden"):
-                    model.dynamics.restore_hidden(env_hidden)
+                if hasattr(model, "act"):
+                    action_tensor = model.act(
+                        torch.as_tensor(obs_value, dtype=torch.float32),
+                        t0=episode_step == 0,
+                        eval_mode=True,
+                    ).unsqueeze(0)
+                else:
+                    obs_tensor = torch.as_tensor(obs_value, dtype=torch.float32, device=device).unsqueeze(0)
+                    z = model.encoder(obs_tensor)
+                    env_hidden = (
+                        model.dynamics.snapshot_hidden()
+                        if hasattr(model.dynamics, "snapshot_hidden")
+                        else None
+                    )
+                    action_tensor = planner.plan(z, device)
+                    if hasattr(model.dynamics, "restore_hidden"):
+                        model.dynamics.restore_hidden(env_hidden)
             action = action_tensor.squeeze(0).cpu().numpy()
-            with torch.no_grad():
-                if hasattr(model.dynamics, "restore_hidden"):
-                    model.dynamics.restore_hidden(env_hidden)
-                _ = model.dynamics(z, action_tensor)
-                if hasattr(model.dynamics, "snapshot_hidden"):
-                    env_hidden = model.dynamics.snapshot_hidden()
+            if not hasattr(model, "act"):
+                with torch.no_grad():
+                    if hasattr(model.dynamics, "restore_hidden"):
+                        model.dynamics.restore_hidden(env_hidden)
+                    _ = model.dynamics(z, action_tensor)
+                    if hasattr(model.dynamics, "snapshot_hidden"):
+                        env_hidden = model.dynamics.snapshot_hidden()
             obs, reward, done, *_ = env.step(action)
             obs_value = obs[0] if isinstance(obs, tuple) else obs
             reward_value = reward[0] if isinstance(reward, (tuple, list, np.ndarray)) else reward
             total_reward += float(reward_value)
+            episode_step += 1
         episode_rewards.append(total_reward)
     return np.mean(episode_rewards), np.std(episode_rewards)
 
@@ -71,8 +86,10 @@ def run_all_evaluations(algorithms: dict, env_name="walker", task="walk", n_epis
     env = make_env(env_name, task)
     results = {}
     for name, model in algorithms.items():
-        model.to(device)
-        model.eval()
+        if hasattr(model, "to"):
+            model.to(device)
+        if hasattr(model, "eval"):
+            model.eval()
         mean, std = evaluate_policy(model, env, n_episodes, device=device, planner_config=(planner_configs or {}).get(name))
         results[name] = {"mean_reward": mean, "std_reward": std}
         print(f"{name}: {mean:.1f} ± {std:.1f}")

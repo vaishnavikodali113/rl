@@ -1,4 +1,27 @@
 import argparse
+import os
+import signal
+import sys
+
+
+def _configure_process_io() -> None:
+    if os.name != "posix":
+        return
+    try:
+        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+    except (AttributeError, OSError, ValueError):
+        pass
+
+
+def _main_guard() -> None:
+    try:
+        main()
+    except BrokenPipeError:
+        try:
+            sys.stdout.close()
+        except Exception:
+            pass
+        raise SystemExit(0)
 
 
 def build_parser():
@@ -159,4 +182,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    _configure_process_io()
+    _main_guard()

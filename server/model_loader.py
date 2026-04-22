@@ -1,8 +1,7 @@
 from pathlib import Path
 
-import torch
-
 from server.config import ARTIFACTS_DIR, ALGORITHM_REGISTRY, BASE_DIR
+from tdmpc2.compat import load_tdmpc2_agent
 
 LOGS_DIR = Path(BASE_DIR) / "logs"
 
@@ -80,40 +79,35 @@ def _preferred_dynamics_type(run_name: str) -> str:
     return "mlp"
 
 
+def _summary_candidates_for_checkpoint(checkpoint_path: Path) -> list[Path]:
+    return [
+        checkpoint_path.parent / "summary.json",
+        checkpoint_path.parent.parent / "summary.json",
+        checkpoint_path.parent.parent.parent / "summary.json",
+        Path(ARTIFACTS_DIR) / checkpoint_path.stem / "summary.json",
+        Path(ARTIFACTS_DIR) / checkpoint_path.parent.name / "summary.json",
+    ]
+
+
 def load_tdmpc_model(ckpt_path: str, device: str, preferred_dynamics_type: str):
     """
-    Loads a TD-MPC2 model from the trainer checkpoint schema saved in this repo.
+    Loads a TD-MPC2 agent from the compatibility artifacts created by tdmpc2/compat.py.
     """
-    from tdmpc2.model import TDMPC2Model
-
-    ckpt = torch.load(ckpt_path, map_location=device)
-    model_state = ckpt["model_state_dict"]
-    config = ckpt.get("config", {})
-
-    dynamics_type = preferred_dynamics_type
-
-    latent_dim = int(
-        config.get("latent_dim", model_state["reward.net.0.weight"].shape[1] - 6)
+    del preferred_dynamics_type
+    checkpoint_path = Path(ckpt_path)
+    summary_path = next(
+        (candidate for candidate in _summary_candidates_for_checkpoint(checkpoint_path) if candidate.is_file()),
+        None,
     )
-    obs_dim = int(model_state["encoder.net.0.weight"].shape[1])
-    act_dim = int(model_state["reward.net.0.weight"].shape[1] - latent_dim)
-    ssm_state_dim = int(config.get("ssm_state_dim", 256))
-    simnorm_dim = int(config.get("simnorm_dim", 8))
-    if simnorm_dim <= 0:
-        simnorm_dim = None
-
-    model = TDMPC2Model(
-        obs_dim=obs_dim,
-        action_dim=act_dim,
-        latent_dim=latent_dim,
-        dynamics_type=dynamics_type,
-        ssm_state_dim=ssm_state_dim,
-        simnorm_dim=simnorm_dim,
+    if summary_path is None:
+        raise FileNotFoundError(
+            f"Missing TD-MPC2 summary.json for checkpoint {ckpt_path}."
+        )
+    return load_tdmpc2_agent(
+        checkpoint_path,
+        summary_path=summary_path,
+        device=device,
     )
-    model.load_state_dict(model_state, strict=False)
-    model.to(device).eval()
-
-    return model
 
 
 def load_model(label: str, device: str = "cpu"):

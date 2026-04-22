@@ -1,156 +1,370 @@
-# Reinforcement Learning Architecture Knowledge Base
+# Reinforcement Learning Knowledge Base
 
-This document serves as the primary technical reference for the RL codebase. It bridges the gap between state-of-the-art research (TD-MPC2, S5, Mamba) and the practical implementation of stable, long-horizon model-based reinforcement learning.
+This document describes the codebase as it exists after the TD-MPC2 submodule migration.
 
----
+The key architectural fact is:
 
-## 1. Theoretical Foundations
+- `tdmpc_2/` is the canonical TD-MPC2 backend.
+- `tdmpc2/` is now a compatibility layer owned by this repo.
 
-### 1.1 TD-MPC2: Latent Space World Models
-TD-MPC2 (Temporal Difference Learning for Model Predictive Control) is a model-based RL algorithm that performs trajectory optimization in a **latent space**. Unlike reconstruction-heavy models (e.g., DreamerV3), TD-MPC2 is **decoder-free**: it learns representations predictive of task-relevant metrics rather than pixels.
+## 1. System Overview
 
-- **Component Modules**:
-    - **Encoder ($h$):** Maps observation $s_t$ to latent state $z_t$.
-    - **Dynamics ($d$):** Predicts $z_{t+1}$ given $z_t$ and $a_t$.
-    - **Reward ($r$):** Predicts scalar reward from $z_t, a_t$.
-    - **Value ($Q$):** Estimates expected future returns via an ensemble of Q-functions ($Q_1, Q_2$).
-- **Core Principle:** Training occurs via joint optimization of reward prediction, value estimation, and **latent consistency** (ensuring $d(z_t, a_t)$ matches the target encoded state $h(s_{t+1})$), typically using discrete regression over log-transformed targets.
-- **Latent Interface Contracts**:
-    - **Dimensionality:** The latent state $z_t$ has a fixed dimension defined by `latent_dim`.
-    - **Normalisation (SimNorm):** Latents are normalized using **Simplicial Normalization**, projecting feature blocks onto a probability simplex (group-wise Softmax).
-    - **Stochasticity:** While the dynamics are functionally deterministic, **MC-Dropout** (p=0.1) is used during training and planning to provide uncertainty estimates.
+There are now three algorithm families in the repo:
 
-### 1.2 Structured State-Space Models (SSMs)
-The codebase replaces traditional MLPs/RNNs in the dynamics model with SSMs to solve the **vanishing gradient** problem over long horizons.
+1. `PPO` and `SAC`
+   Local training code built around Stable-Baselines3.
+2. `TD-MPC2`
+   Trained and loaded through the upstream `tdmpc_2` Git submodule.
+3. `Visualization / Evaluation`
+   Repo-specific tooling that reads artifacts, loads policies, renders rollouts, and builds comparison outputs.
 
-- **HiPPO (High-Order Polynomial Projection Operator):** A mathematical framework that projects the signal history onto orthogonal polynomials. It is used to initialize the $A$ matrix, allowing the model to track dependencies over thousands of steps.
-- **S4/S5 (Diagonal SSMs):** 
-    - **S4:** Uses a bank of independent SISO (Single-Input Single-Output) systems.
-    - **S5:** Standardizes the state transition matrix $A$ into a **diagonal MIMO** system. It uses a **Zero-Order Hold (ZOH)** discretization to compute $\bar{A} = \exp(\Delta A)$.
-- **Mamba (Selective SSM):** Introduces **Selectivity**. Discretization ($\Delta$) is computed via a Softplus projection of the input $u_t$, allowing the model to modulate information flow (gating) based on the current latent state.
+## 2. High-Level Execution Paths
 
-### 1.3 MPPI: Model Predictive Path Integral
-A derivative-free, sampling-based optimal control algorithm. 
-- **Mechanism:**
-    1. Sample $N$ candidate action sequences from a Gaussian distribution centered on a nominal sequence.
-    2. Roll out sequences in the **latent world model** over horizon $H$.
-    3. Calculate total returns (sum of predicted rewards + terminal value).
-    4. Update the nominal sequence using a **Softmax-weighted average** of the samples.
-- **Information Theoretic Basis:** Updates are derived from the KL-divergence between the controller distribution and the optimal (reward-weighted) distribution.
+### 2.1 TD-MPC2 Training
 
-### 1.4 Stability Techniques
-- **SAM (Sharpness-Aware Minimization):** Instead of just minimizing loss, SAM seeks parameters in **flat minima** where the loss is low even under local perturbations. This makes the world model more robust to out-of-distribution planning.
-- **InfoProp (Uncertainty-Aware Planning):** Uses **MC-Dropout variance** to detect when the model is "hallucinating." It truncates unreliable rollouts and falls back to a learned Value function bootstrap.
+Entry path:
 
----
+- `main.py`
+- `tdmpc2/train_tdmpc2.py`
+- `tdmpc2/compat.py::train_with_vendor_backend`
 
-## 2. File-by-File Technical Breakdown
+Flow:
 
-### 2.1 Dynamics Layer (`ssm/`)
+1. The legacy CLI still calls `tdmpc2.train_tdmpc2.main(...)`.
+2. That wrapper delegates to `tdmpc2.compat.train_with_vendor_backend(...)`.
+3. The compatibility layer loads the upstream config from `tdmpc_2/tdmpc2/config.yaml`.
+4. It imports the upstream trainer modules by adding `tdmpc_2/tdmpc2/` to `sys.path`.
+5. It runs the upstream trainer without modifying submodule files.
+6. It converts the resulting outputs into this repo’s historical artifact layout.
 
-#### `ssm_world_model.py`
-**`SSMDynamics` (Class)**
-- **Role:** High-level interface for MPPI. It manages the recurrent hidden state `_hidden`.
-- **Function `forward(z, action)`:** 
-    1. Concatenates $z$ and $a$.
-    2. Performs recurrence via `ssm.step(hidden, u)`.
-    3. Prevents graph growth via `.detach()` during planning (non-grad).
-    4. Applies **Dropout** (p=0.1) and **SimNorm**.
-- **Hidden State Management:** 
-    - `reset_hidden(batch_size)`: Initializes `_hidden` to zeros. MUST be called at the start of each MPPI rollout batch and each training sequence.
-    - `detach_hidden()`: Used during training to facilitate Truncated Backpropagation Through Time (T-BPTT).
+### 2.2 TD-MPC2 Loading
 
-#### `s5_layer.py`
-**`S5Layer` (Class)**
-- **Mechanism:** Linear transition $h_t = \bar{A} h_{t-1} + \bar{B} u_t$.
-- **Initialization:** `make_hippo_diag()` uses a Hippo-style initialization for the log-negative diagonal of $A$.
-- **Discretization:** Uses Zero-Order Hold (ZOH). $\bar{A}$ and $\bar{B}$ are pre-computed analytically before the step.
+Entry path:
 
-#### `mamba_layer.py`
-**`MambaLayer` (Class)**
-- **Mechanism:** $h_t = \exp(\Delta A) h_{t-1} + (\Delta B) u_t$.
-- **Selectivity:** $\Delta$ (discretization step) is predicted per-step using `dt_proj` (Softplus). $B$ is also input-dependent (`b_proj`), allowing selective information intake based on $z_t, a_t$.
+- `server/model_loader.py`
+- `evaluation/main.py`
+- `tdmpc2/compat.py::load_tdmpc2_agent`
 
----
+Flow:
 
-### 2.2 Optimizer & Planning (`planning/`)
+1. The loader reads a compatibility `summary.json`.
+2. It rebuilds the upstream TD-MPC2 config from `summary["config"]`.
+3. It instantiates the upstream TD-MPC2 agent.
+4. It loads `model.pt`.
+5. Server and evaluation code then use the upstream agent directly.
 
-#### `mppi.py`
-**`MPPI` (Class)**
-- **`plan(z, device)`:** 
-    1. Samples $N=512$ sequences from a nominal distribution.
-    2. Resets dynamics hidden state for $B \times N$ samples.
-    3. Scores trajectories using discounted predicted rewards.
-- **`_update_nominal_sequence()`:** Updates the mean of the sampling distribution using a **Softmax-weighted average** of elites. The sequence is then **time-shifted** (warm-start) for the next step.
+### 2.3 Live Rollouts
 
-#### `info_prop.py`
-**`InfoProp` (Class)**
-- **`compute_uncertainty()`:** Measure variance across $K=5$ stochastic forward passes (via MC-Dropout). Uncertainty is defined as the mean variance of the predicted latent transition $z_{t+1}$.
-- **`plan_with_truncation()`:** 
-    - Truncates rollouts where `uncertainty / running_var > threshold`.
-    - **Bootstrap:** Replaces the remainder of truncated trajectories with the average of the Ensemble Q-functions ($Q_1, Q_2$).
-    - **Avoidance Bias:** If Value functions are not yet "ready" (unreliable), the reward is set to 0, biasing the planner away from unknown regions.
+Entry path:
 
-#### `sam_optimizer.py`
-**`SAM` (Class)**
-- Wraps standard optimizers (Adam). 
-- **`first_step()`:** Moves parameters to the "worst-case" neighbor (maximizing local loss).
-- **`second_step()`:** Computes the final gradient at that peak and moves back to origin to apply the update.
+- `server/rollout_engine.py`
 
-#### `sim_norm.py`
-**`SimNorm` (Class)**
-- **Geometry:** Projects the latent vector into **simplex blocks**. It reshapes the input into groups of size `simnorm_dim=8` and applies `softmax` across the last dimension. This ensures the latent space remains bounded and promotes sparse feature activation.
+Behavior:
 
----
+- PPO/SAC continue to use `model.predict(...)`.
+- TD-MPC2 now prefers the upstream agent `act(...)` API.
+- The old MPPI path remains only for legacy world-model objects if they ever reappear.
 
-### 2.3 System Integration (Root)
+## 3. File-By-File Breakdown
+
+### 3.1 Root Files
 
 #### `main.py`
-The CLI router. It defines **Phase presets**:
-- `tdmpc`: Baseline MLP ($H=5$).
-- `phase3`: Stability stack ($H=10$, SSM, SAM, InfoProp).
+
+Purpose:
+
+- Unified CLI router for training, plotting, and evaluation.
+
+Important behavior:
+
+- `tdmpc` and `phase3` still route through `tdmpc2.train_tdmpc2`.
+- `tdmpc-s4`, `tdmpc-s5`, and `tdmpc-mamba` remain available for naming compatibility.
+
+#### `app.py`
+
+Purpose:
+
+- Unified launcher for FastAPI backend and dashboard.
+
+Important behavior:
+
+- Detects whether to serve static frontend assets or spawn the dashboard dev server.
+- Does not know TD-MPC2 internals; it only launches the app stack.
 
 #### `env_setup.py`
-**`DMCWrapper`**
-- Connects `dm_control` (MuJoCo) to `gymnasium`. Handles observation flattening and spec translation.
 
-#### `device_utils.py`
-Abstraction for hardware parity. 
-- **Linux/Fedora:** Prioritizes `cuda`.
-- **macOS:** Prioritizes `mps`.
+Purpose:
 
----
+- Local `dm_control` to Gymnasium adapter used by SB3 training and the visualization backend.
 
----
+Important behavior:
 
-## 4. Conceptual Alignment & Technical Risks
+- Returns flattened state observations.
+- Supports vectorized and non-vectorized environments.
+- This is separate from the upstream TD-MPC2 environment code inside the submodule.
 
-### 4.1 Canonical TD-MPC2 vs. This Implementation
-| Feature | Canonical TD-MPC2 | This Project |
-| :--- | :--- | :--- |
-| **Planner** | Gradient-based (CEM/MPPI) | Pure MPPI (Sampling-based) |
-| **Dynamics** | MLP/RNN | Structured State-Space (S5/Mamba) |
-| **Latent Targets** | One-step consistency | Recurrent sequence consistency |
-| **Robustness** | LayerNorm/Ensemble | SAM + InfoProp (Truncation) |
+#### `run_layout.py`
 
-### 4.2 Engineering Risks & Mitigations
-- **Hidden State Contamination:** MPPI requires $N$ independent latent rollouts. Failure to call `reset_hidden` with the correct batch size before `plan()` leads to state leakage across samples.
-- **Train-Plan Mismatch:** MC-Dropout must be explicitly toggled in `InfoProp` while the rest of the model remains in `.eval()` mode to ensure uncertainty is calibrated.
-- **Bootstrap Accuracy:** Truncation relies on a calibrated Q-ensemble. If the Value heads are trained on teacher-forced latents but queried on drifted SSM rollouts, the bootstrap target may be overconfident.
-- **Numerical Stability:** SSM recurrent chains can explode. `SimNorm` is the primary safeguard; if the latent dimension is not divisible by the group size (8), initialization will fail.
+Purpose:
 
----
+- Historical run directory manager for local training code.
 
-## 5. Experimental Pipeline & Log Layout
+Current status:
 
-### 3.1 Training Phases
-1. **Phase 0 (Baselines):** PPO and SAC benchmarks to establish the "floor."
-2. **Phase 1 (MLP TD-MPC):** Short horizon ($H=5$) latent optimization.
-3. **Phase 2 (SSM Dynamics):** Comparing MLP vs. S4 vs. S5 vs. Mamba at standard horizons.
-4. **Phase 3 (Long-Horizon Stability):** Pushing to $H=10$ using the full stability stack (S5 + SAM + InfoProp).
+- Still relevant for PPO/SAC and older workflows.
+- Not the active TD-MPC2 training layout anymore.
 
-### 3.2 Output Directories
-- **`logs/`**: Raw Tensorboard events and checkpoint files.
-- **`artifacts/`**: 
-    - `metrics.jsonl`: Step-by-step history of `eval/mean_reward` and loss values.
-    - `plots/`: Phase-specific performance visualizations generated by `plot_results.py`.
+### 3.2 `tdmpc2/` Compatibility Layer
+
+#### `tdmpc2/compat.py`
+
+This is now the most important TD-MPC2 integration file in the repo.
+
+Responsibilities:
+
+- locate the submodule
+- import upstream modules safely
+- build an upstream-compatible config from repo CLI arguments
+- run upstream training
+- sync upstream outputs into local compatibility artifacts
+- reconstruct upstream agents from stored metadata
+
+Key functions:
+
+- `build_vendor_cfg(...)`
+  Maps old repo arguments like `env_name`, `task`, `run_name`, and `dynamics_type` into an upstream OmegaConf config.
+- `train_with_vendor_backend(...)`
+  Runs the upstream training stack and materializes compatibility outputs.
+- `materialize_compat_artifacts(...)`
+  Writes `summary.json`, `metrics.jsonl`, `model.pt`, and `evaluations.npz`.
+- `load_tdmpc2_agent(...)`
+  Rebuilds an upstream agent for inference.
+
+Important constraint:
+
+- This integration is CUDA-only because the upstream code hardcodes CUDA tensors in multiple internals.
+
+#### `tdmpc2/train_tdmpc2.py`
+
+Purpose:
+
+- Legacy entrypoint retained for compatibility.
+
+Current behavior:
+
+- No longer trains the old in-repo world model.
+- Delegates into `tdmpc2.compat.train_with_vendor_backend(...)`.
+
+Important note:
+
+- The old parameters for custom dynamics and planning are still accepted so old scripts do not crash.
+- Those parameters are no longer forwarded into a custom TD-MPC2 implementation.
+
+#### `tdmpc2/__init__.py`
+
+Purpose:
+
+- Re-exports the current public compatibility surface.
+
+Current exports:
+
+- `build_vendor_cfg`
+- `load_tdmpc2_agent`
+- `train_with_vendor_backend`
+
+#### `tdmpc2/model.py`, `tdmpc2/trainer.py`, `tdmpc2/replay_buffer.py`
+
+Status:
+
+- Historical implementation files from the older custom TD-MPC2 stack.
+
+Current role:
+
+- They are no longer on the active training or loading path after the submodule migration.
+- Treat them as archived reference code unless you intentionally plan a larger cleanup.
+
+### 3.3 Submodule: `tdmpc_2/`
+
+#### `tdmpc_2/tdmpc2/train.py`
+
+Purpose:
+
+- Upstream Hydra training entrypoint.
+
+Why this repo does not call it directly:
+
+- It assumes its own source tree is the import root.
+- It asserts CUDA.
+- It writes logs in the upstream directory structure, not this repo’s historical artifact format.
+
+The compatibility layer instead imports the same upstream components and orchestrates them from the parent repo.
+
+#### `tdmpc_2/tdmpc2/tdmpc2.py`
+
+Purpose:
+
+- Upstream TD-MPC2 agent implementation.
+
+Important behavior:
+
+- Provides `act(...)`, `update(...)`, `save(...)`, and `load(...)`.
+- Hardcodes CUDA device usage internally.
+- Is the runtime object used by server/evaluation after reconstruction.
+
+#### `tdmpc_2/tdmpc2/common/`
+
+Important modules:
+
+- `parser.py`
+  Converts and enriches Hydra configs.
+- `buffer.py`
+  Upstream replay buffer with CUDA-aware storage policy.
+- `logger.py`
+  Writes upstream logs and optional `eval.csv`.
+- `layers.py`, `world_model.py`, `scale.py`
+  Core model building blocks.
+
+#### `tdmpc_2/tdmpc2/envs/`
+
+Purpose:
+
+- Upstream task factory and wrappers for TD-MPC2 training/evaluation.
+
+Important distinction:
+
+- This environment stack is used during TD-MPC2 training.
+- The repo’s own `env_setup.py` is used for SB3 flows and visualization.
+
+### 3.4 `server/`
+
+#### `server/config.py`
+
+Purpose:
+
+- Registry of displayable algorithms and artifact folder names.
+
+Important behavior:
+
+- Keeps the old run labels, including legacy TD-MPC2 variant names.
+- Those labels still matter because the server UI expects stable artifact directories.
+
+#### `server/model_loader.py`
+
+Purpose:
+
+- Loads PPO, SAC, and TD-MPC2 models for the visualization backend.
+
+Current TD-MPC2 behavior:
+
+- Finds `model.pt`
+- Finds the matching `summary.json`
+- Reconstructs an upstream TD-MPC2 agent through `tdmpc2.compat.load_tdmpc2_agent(...)`
+
+#### `server/rollout_engine.py`
+
+Purpose:
+
+- Uniform runtime wrapper around all loaded policies.
+
+Important behavior:
+
+- For PPO/SAC: calls `predict(...)`.
+- For TD-MPC2 agent objects: calls `act(...)`.
+- Falls back to the old MPPI planner only if a legacy world-model object is passed in.
+
+### 3.5 `evaluation/`
+
+#### `evaluation/main.py`
+
+Purpose:
+
+- Offline evaluation entrypoint for saved runs.
+
+Current behavior:
+
+- Discovers runs from `artifacts/*/summary.json`.
+- Reconstructs TD-MPC2 agents from compatibility metadata.
+- Produces comparison CSVs and a short markdown report.
+
+#### `evaluation/compare_plots.py`
+
+Purpose:
+
+- Reads `summary.json`, `metrics.jsonl`, and `evaluations.npz`.
+
+Important behavior:
+
+- Does not know about the submodule directly.
+- It only depends on the compatibility artifact contract.
+
+#### `evaluation/eval_runner.py`
+
+Purpose:
+
+- Shared evaluation loop.
+
+Current behavior:
+
+- Uses `model.act(...)` when the loaded object is an upstream TD-MPC2 agent.
+- Uses MPPI/world-model planning only for legacy objects.
+
+#### `evaluation/benchmark.py`
+
+Purpose:
+
+- Lightweight performance benchmarking helper.
+
+Current behavior:
+
+- Benchmarks `act(...)` latency for upstream TD-MPC2 agents.
+- Benchmarks rollout latency for legacy world-model objects.
+
+### 3.6 `dashboard/`
+
+Purpose:
+
+- Frontend only.
+
+Current relationship to the migration:
+
+- It continues to read whatever the backend exposes.
+- The migration impact is indirect through `server/`.
+
+## 4. Artifact Contract
+
+For a compatibility run `artifacts/<run_name>/`, these files are expected:
+
+- `summary.json`
+  Canonical metadata record for loaders and evaluators.
+- `metrics.jsonl`
+  Line-delimited metrics generated from upstream `eval.csv`.
+- `model.pt`
+  Upstream TD-MPC2 agent checkpoint copied into the historical artifact path.
+
+For `logs/<run_name>/`, these files are expected:
+
+- `eval/evaluations.npz`
+  Compatibility evaluation curve file.
+- `best/best_model.pt`
+  Convenience copy for older loader assumptions.
+- `models/final.pt`
+  Convenience copy of the final upstream checkpoint.
+
+## 5. Architectural Truths To Preserve
+
+1. Do not edit `tdmpc_2/` for project-specific integration work.
+2. Keep the compatibility boundary in `tdmpc2/compat.py`.
+3. Preserve `summary.json` as the source of truth for TD-MPC2 reconstruction.
+4. Preserve historical run names unless there is a deliberate migration plan.
+5. Be explicit that legacy `s4`/`s5`/`mamba` labels are compatibility aliases, not upstream feature flags.
+
+## 6. Risks And Gotchas
+
+- CUDA dependency:
+  TD-MPC2 will fail without CUDA because the submodule is used unmodified.
+- Dual environment stacks:
+  `env_setup.py` and `tdmpc_2/tdmpc2/envs/` serve different purposes.
+- Legacy files:
+  The old in-tree TD-MPC2 implementation still exists, which can mislead new contributors if they do not start from `tdmpc2/compat.py`.
+- Artifact assumptions:
+  Server and evaluation code now depend on the compatibility summary schema rather than the old custom checkpoint schema.
