@@ -10,8 +10,8 @@ from run_layout import init_run_paths
 
 
 TASK_DEFAULTS = {
-    "cheetah": ("run", "sac_cheetah", 100_000),
-    "walker": ("walk", "sac_walker", 100_000),
+    "cheetah": ("run", "sac_cheetah", 10_000),
+    "walker": ("walk", "sac_walker", 10_000),
 }
 
 
