@@ -104,12 +104,23 @@ def main():
     elif args.command == "sac":
         from train_sac_mac import main as train_sac_main
 
-        train_sac_main(
-            env_name=args.env_name or "cheetah",
-            task=args.task,
-            run_name=args.run_name,
-            total_timesteps=args.total_steps,
-        )
+        if args.env_name:
+            train_sac_main(
+                env_name=args.env_name,
+                task=args.task,
+                run_name=args.run_name,
+                total_timesteps=args.total_steps,
+            )
+        else:
+            for env in ["cheetah", "walker"]:
+                print(f"\n+++ Running SAC for {env} +++\n")
+                run_name = f"{args.run_name}_{env}" if args.run_name else None
+                train_sac_main(
+                    env_name=env,
+                    task=args.task,
+                    run_name=run_name,
+                    total_timesteps=args.total_steps,
+                )
     elif args.command == "tdmpc":
         from tdmpc2.train_tdmpc2 import main as train_tdmpc_main
 
