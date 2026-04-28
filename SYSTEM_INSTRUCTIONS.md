@@ -1,71 +1,64 @@
-# System Instructions For New Agents
+# System Instructions (Repo Conventions)
 
-Start from these rules when working in this repository.
+This file documents the “operational contract” of the repository: directory conventions, artifact formats, and how the subsystems are expected to interact.
 
-## 1. Ground Truth
+## Core invariants
 
-- The active TD-MPC2 backend is the Git submodule at `tdmpc_2/`.
-- The local `tdmpc2/` package is a compatibility layer, not the canonical algorithm implementation.
-- Do not assume the old in-tree `tdmpc2/model.py` and `tdmpc2/trainer.py` are still active.
+- **Run names are canonical identifiers**:
+  - `run_name` appears in `artifacts/<run_name>/summary.json`
+  - `run_name` is used by plotting (`plot_results.py`) and evaluation (`evaluation/*`)
+  - the dashboard backend expects specific run names via `server/config.py:ALGORITHM_REGISTRY`
 
-## 2. Do Not Edit The Submodule For Repo Integration
+- **Output layout**
+  - `logs/<run_name>/` is for checkpoints and SB3 evaluation outputs
+  - `artifacts/<run_name>/` is for portable visualization assets:
+    - `metrics.jsonl`
+    - `summary.json`
+    - optionally `rollout_errors.npy`
 
-Unless the task explicitly asks for an upstream fork, treat `tdmpc_2/` as read-only.
+- **Destructive behavior**
+  - `run_layout.init_run_paths(run_name)` deletes `logs/<run_name>/` and `artifacts/<run_name>/` if they exist.
+  - Don’t reuse a run name unless you intend to overwrite it.
 
-All repo-specific adaptation belongs in:
+## Dashboard contracts
 
-- `tdmpc2/compat.py`
-- `server/`
-- `evaluation/`
-- docs and metadata files
+- **WebSocket**: backend streams JSON on `/ws` with shape:
+  - `labels: string[]`
+  - `models: ModelCard[]`
+  - `frames: base64_jpeg[]`
+  - `metrics: StepMetric[]`
 
-## 3. Files To Read First
+- **REST**:
+  - `/health` must be cheap and always available (used for UX state).
+  - `/artifacts/*` endpoints should be read-only and derived from files under `artifacts/`.
 
-Read these before making TD-MPC2 changes:
+## TD‑MPC2 integration expectations (current repo state)
 
-1. `README.md`
-2. `knowledge_base.md`
-3. `tdmpc2/compat.py`
-4. `server/model_loader.py`
-5. `server/rollout_engine.py`
-6. `evaluation/main.py`
+This repository references TD‑MPC2 via imports like `tdmpc2.train_tdmpc2` and `tdmpc2.compat.load_tdmpc2_agent`.
 
-## 4. TD-MPC2 Runtime Rules
+In this checkout:
+- `tdmpc2/` exists but is empty.
+- `.gitmodules` declares submodule `tdmpc_2` with URL `nicklashansen/tdmpc2`, but the folder is not present.
 
-- The submodule integration is CUDA-only.
-- If CUDA is unavailable, TD-MPC2 training/loading should fail clearly rather than silently degrade.
-- PPO and SAC are still separate local flows and may work on CPU/MPS.
+Rule:
+- If you want TD‑MPC2 commands, evaluation benchmarking, or TD‑MPC2 live rollouts to work, you must fetch TD‑MPC2 code and ensure it is importable (submodule + `PYTHONPATH` / editable install / vendoring).
 
-## 5. Artifact Contract
+## Adding a new algorithm
 
-When TD-MPC2 training runs through the compatibility layer, preserve these outputs:
+If you add a new algorithm or model type, update in this order:
 
-- `artifacts/<run_name>/summary.json`
-- `artifacts/<run_name>/metrics.jsonl`
-- `artifacts/<run_name>/model.pt`
-- `logs/<run_name>/eval/evaluations.npz`
+1. `server/config.py:ALGORITHM_REGISTRY` (what the live server attempts to load)
+2. `server/model_loader.py` (how checkpoints are discovered and loaded)
+3. `server/rollout_engine.py:ModelAgent.step()` (how actions are produced and how resets are handled)
+4. `dashboard/` (optional: colors/labels mapping, UI copy)
 
-`summary.json` is the source of truth for reconstructing TD-MPC2 agents later.
+## Artifact compatibility (recommendation)
 
-## 6. Legacy Naming
+To keep plotting and dashboard endpoints simple:
 
-- `tdmpc`, `tdmpc-s4`, `tdmpc-s5`, and `tdmpc-mamba` commands still exist.
-- The upstream submodule does not implement the old custom structured-dynamics variants from this repo.
-- Keep those legacy names only for compatibility unless a deliberate migration changes them.
+- Always write `artifacts/<run_name>/summary.json` with at least:
+  - `run_name`, `algorithm`, `environment`, `total_timesteps`
+  - `artifacts.metrics_jsonl`, `artifacts.summary_json`, `artifacts.model`, `artifacts.eval_npz` (when available)
+- For model-based runs, write:
+  - `artifacts/<run_name>/rollout_errors.npy` with shape `[horizon]`
 
-If you touch docs or UX around these commands, be explicit that the non-`mlp` labels are compatibility aliases.
-
-## 7. Preferred Debug Path
-
-For TD-MPC2 issues, check in this order:
-
-1. `tdmpc2/compat.py`
-2. compatibility artifacts in `artifacts/<run_name>/summary.json`
-3. server/evaluation loaders
-4. only then inspect the submodule internals in `tdmpc_2/`
-
-## 8. Safe Assumptions
-
-- Existing dashboards and evaluation code should keep working through compatibility artifacts.
-- New work should preserve stable run names unless there is a migration plan.
-- If you need to change the TD-MPC2 integration boundary, document it in both `README.md` and `knowledge_base.md`.
