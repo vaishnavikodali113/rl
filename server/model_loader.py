@@ -93,7 +93,6 @@ def load_tdmpc_model(ckpt_path: str, device: str, preferred_dynamics_type: str):
     """
     Loads a TD-MPC2 agent from the compatibility artifacts created by tdmpc2/compat.py.
     """
-    del preferred_dynamics_type
     checkpoint_path = Path(ckpt_path)
     summary_path = next(
         (candidate for candidate in _summary_candidates_for_checkpoint(checkpoint_path) if candidate.is_file()),
@@ -107,6 +106,7 @@ def load_tdmpc_model(ckpt_path: str, device: str, preferred_dynamics_type: str):
         checkpoint_path,
         summary_path=summary_path,
         device=device,
+        dynamics_type=preferred_dynamics_type,
     )
 
 
