@@ -95,73 +95,158 @@ def main():
     elif args.command == "ppo":
         from train_ppo_mac import main as train_ppo_main
 
-        train_ppo_main(
-            env_name=args.env_name or "walker",
-            task=args.task,
-            run_name=args.run_name,
-            total_timesteps=args.total_steps,
-        )
+        if args.env_name:
+            train_ppo_main(
+                env_name=args.env_name,
+                task=args.task,
+                run_name=args.run_name,
+                total_timesteps=args.total_steps or 10_000,
+            )
+        else:
+            for env in ["cheetah", "walker"]:
+                print(f"\n+++ Running PPO for {env} +++\n")
+                run_name = f"{args.run_name}_{env}" if args.run_name else None
+                train_ppo_main(
+                    env_name=env,
+                    task=args.task,
+                    run_name=run_name,
+                    total_timesteps=args.total_steps or 10_000,
+                )
+
     elif args.command == "sac":
         from train_sac_mac import main as train_sac_main
 
-        train_sac_main(
-            env_name=args.env_name or "cheetah",
-            task=args.task,
-            run_name=args.run_name,
-            total_timesteps=args.total_steps,
-        )
+        if args.env_name:
+            train_sac_main(
+                env_name=args.env_name,
+                task=args.task,
+                run_name=args.run_name,
+                total_timesteps=args.total_steps or 10_000,
+            )
+        else:
+            for env in ["cheetah", "walker"]:
+                print(f"\n+++ Running SAC for {env} +++\n")
+                run_name = f"{args.run_name}_{env}" if args.run_name else None
+                train_sac_main(
+                    env_name=env,
+                    task=args.task,
+                    run_name=run_name,
+                    total_timesteps=args.total_steps or 10_000,
+                )
     elif args.command == "tdmpc":
         from tdmpc2.train_tdmpc2 import main as train_tdmpc_main
 
-        train_tdmpc_main(
-            env_name=args.env_name or "walker",
-            task=args.task,
-            run_name=args.run_name,
-            total_steps=args.total_steps or 10_000,
-            max_wall_clock_seconds=args.max_wall_clock_seconds,
-        )
+        if args.env_name:
+            train_tdmpc_main(
+                env_name=args.env_name,
+                task=args.task,
+                run_name=args.run_name,
+                total_steps=args.total_steps or 10_000,
+            )
+        else:
+            for env in ["cheetah", "walker"]:
+                print(f"\n+++ Running TDMPC-MLP for {env} +++\n")
+                run_name = f"{args.run_name}_{env}" if args.run_name else None
+                train_tdmpc_main(
+                    env_name=env,
+                    task=args.task,
+                    run_name=run_name,
+                    total_steps=args.total_steps or 10_000,
+                )
+
     elif args.command == "tdmpc-s4":
         from train_tdmpc2_s4 import main as train_tdmpc_s4_main
 
-        train_tdmpc_s4_main(
-            env_name=args.env_name or "walker",
-            task=args.task,
-            run_name=args.run_name,
-            total_steps=args.total_steps or 10_000,
-            max_wall_clock_seconds=args.max_wall_clock_seconds,
-        )
+        if args.env_name:
+            train_tdmpc_s4_main(
+                env_name=args.env_name,
+                task=args.task,
+                run_name=args.run_name,
+                total_steps=args.total_steps or 10_000,
+            )
+        else:
+            for env in ["cheetah", "walker"]:
+                print(f"\n+++ Running TDMPC_s4 for {env} +++\n")
+                run_name = f"{args.run_name}_{env}" if args.run_name else None
+                train_tdmpc_s4_main(
+                    env_name=env,
+                    task=args.task,
+                    run_name=run_name,
+                    total_steps=args.total_steps or 10_000,
+                )
+
+
     elif args.command == "tdmpc-s5":
         from train_tdmpc2_s5 import main as train_tdmpc_s5_main
 
-        train_tdmpc_s5_main(
-            env_name=args.env_name or "walker",
-            task=args.task,
-            run_name=args.run_name,
-            total_steps=args.total_steps or 10_000,
-            max_wall_clock_seconds=args.max_wall_clock_seconds,
-        )
+        if args.env_name:
+            train_tdmpc_s5_main(
+                env_name=args.env_name,
+                task=args.task,
+                run_name=args.run_name,
+                total_steps=args.total_steps or 10_000,
+            )
+        else:
+            for env in ["cheetah", "walker"]:
+                print(f"\n+++ Running TDMPC-s5 for {env} +++\n")
+                run_name = f"{args.run_name}_{env}" if args.run_name else None
+                train_tdmpc_s5_main(
+                    env_name=env,
+                    task=args.task,
+                    run_name=run_name,
+                    total_steps=args.total_steps or 10_000,
+                )
+
+        
     elif args.command == "tdmpc-mamba":
         from train_tdmpc2_mamba import main as train_tdmpc_mamba_main
 
-        train_tdmpc_mamba_main(
-            env_name=args.env_name or "walker",
-            task=args.task,
-            run_name=args.run_name,
-            total_steps=args.total_steps or 10_000,
-            max_wall_clock_seconds=args.max_wall_clock_seconds,
-        )
+        if args.env_name:
+            train_tdmpc_mamba_main(
+                env_name=args.env_name,
+                task=args.task,
+                run_name=args.run_name,
+                total_steps=args.total_steps or 10_000,
+            )
+        else:
+            for env in ["cheetah", "walker"]:
+                print(f"\n+++ Running TDMPC-Mamba for {env} +++\n")
+                run_name = f"{args.run_name}_{env}" if args.run_name else None
+                train_tdmpc_mamba_main(
+                    env_name=env,
+                    task=args.task,
+                    run_name=run_name,
+                    total_steps=args.total_steps or 10_000,
+                )
+    
     elif args.command == "phase3":
         from tdmpc2.train_tdmpc2 import main as train_tdmpc_main
 
-        train_tdmpc_main(
-            dynamics_type="s5",
-            plan_horizon=10,
-            use_sam=True,
-            use_info_prop=True,
-            total_steps=args.total_steps or 10_000,
-            max_wall_clock_seconds=args.max_wall_clock_seconds,
-            run_name="tdmpc2_walker_s5_h10",
+        if args.env_name:
+            train_tdmpc_main(
+                dynamics_type="s5",
+                plan_horizon=10,
+                use_sam=True,
+                use_info_prop=True,
+                total_steps=args.total_steps or 10_000,
+                max_wall_clock_seconds=args.max_wall_clock_seconds,
+                run_name=args.run_name,
         )
+        
+        else:
+            for env in ["cheetah", "walker"]:
+                print(f"\n+++ Running TDMPC-H10 for {env} +++\n")
+                run_name = f"{args.run_name}_{env}" if args.run_name else None
+                train_tdmpc_main(
+                    dynamics_type="s5",
+                    plan_horizon=10,
+                    use_sam=True,
+                    use_info_prop=True,
+                    total_steps=args.total_steps or 10_000,
+                    max_wall_clock_seconds=args.max_wall_clock_seconds,
+                    run_name=run_name,
+            )
+
     elif args.command == "plot":
         from plot_results import main as plot_main
 
